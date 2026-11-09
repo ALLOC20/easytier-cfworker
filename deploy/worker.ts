@@ -124,37 +124,6 @@ function readVarint(buffer: Uint8Array, offset: number): [number, number] {
   }
 }
 
-function appendVarint(target: number[], value: number): void {
-  let current = value;
-  while (current >= 0x80) {
-    target.push((current & 0x7f) | 0x80);
-    current = Math.floor(current / 128);
-  }
-  target.push(current);
-}
-
-function encodeLengthDelimited(field: number, payload: Uint8Array): number[] {
-  const out: number[] = [];
-  appendVarint(out, field * 8 + 2);
-  appendVarint(out, payload.length);
-  return out;
-}
-
-/** 编码 common.DirectRpcRequest：1 方法名(string)，2 请求(bytes)，3 超时(uint64) */
-function encodeDirectRpcRequest(
-  fullMethodName: string,
-  request: Uint8Array,
-  timeoutMs: number,
-): Uint8Array {
-  const name = new TextEncoder().encode(fullMethodName);
-  const out: number[] = [];
-  out.push(...encodeLengthDelimited(1, name), ...name);
-  out.push(...encodeLengthDelimited(2, request));
-  appendVarint(out, 3 * 8 + 0);
-  appendVarint(out, timeoutMs);
-  return new Uint8Array(out);
-}
-
 // ---- 声明式消息解码（显式字段号 → JSON 键） ----
 
 interface FieldSpec {
@@ -536,8 +505,6 @@ const CLI_COMMANDS: Record<
   },
 };
 
-const CLI_RPC_TIMEOUT_MS = 10_000;
-
 async function handleCliRequest(
   request: Request,
   env: Env,
@@ -555,19 +522,16 @@ async function handleCliRequest(
     );
   }
 
-  // 请求经内部 header 转发进 DO，由内核 management-rpc ABI 执行
-  const body = encodeDirectRpcRequest(
-    definition.method,
-    EMPTY_REQUEST,
-    CLI_RPC_TIMEOUT_MS,
-  );
+  // 请求经内部 header 转发进 DO，由内核 management-rpc ABI 执行。
+  // 注意：DirectRpcRequest 信封由 runtime.rpc() 负责编码，这里只发命令的
+  // 原始 protobuf 请求体（当前四个命令的请求消息都是空消息）
   const forwarded = new Request(request.url, {
     method: "POST",
     headers: {
       "x-easytier-rpc": definition.method,
       "content-type": "application/octet-stream",
     },
-    body: body as unknown as BodyInit,
+    body: EMPTY_REQUEST as unknown as BodyInit,
   });
   const objectName =
     env.EASYTIER_OBJECT_NAME || new URL(request.url).hostname;
