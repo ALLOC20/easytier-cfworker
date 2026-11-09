@@ -503,6 +503,34 @@ const CLI_COMMANDS: Record<
       return { node_info: decoded.node_info ?? null };
     },
   },
+  "dump-route": {
+    method: "api.instance.PeerManageRpc.DumpRoute",
+    decode: (bytes) => {
+      const decoded = decodeMessageAt(bytes, [
+        { field: 1, kind: "string", name: "result" },
+      ], 0, bytes.length);
+      return { result: decoded.result ?? "" };
+    },
+  },
+  "foreign-network": {
+    method: "api.instance.PeerManageRpc.ListForeignNetwork",
+    decode: (bytes) => {
+      const decoded = decodeMessageAt(bytes, [
+        { field: 1, kind: "message", name: "foreign_networks", spec: [], repeated: true },
+      ], 0, bytes.length);
+      return { foreign_networks: decoded.foreign_networks ?? [] };
+    },
+  },
+  "public-ipv6": {
+    method: "api.instance.PeerManageRpc.ListPublicIpv6Info",
+    decode: (bytes) => {
+      const decoded = decodeMessageAt(bytes, [
+        { field: 1, kind: "message", name: "provider_prefix", spec: [] },
+        { field: 2, kind: "message", name: "provider_leases", spec: [], repeated: true },
+      ], 0, bytes.length);
+      return { ...decoded };
+    },
+  },
 };
 
 async function handleCliRequest(
