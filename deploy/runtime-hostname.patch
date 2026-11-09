@@ -182,7 +182,7 @@ index 0eb7608..58da3ff 100644
    close(): Promise<void>;
  }
 diff --git a/easytier-js/runtime/src/runtime.ts b/easytier-js/runtime/src/runtime.ts
-index e2b7f26..91a0b3d 100644
+index e2b7f26..44234b3 100644
 --- a/easytier-js/runtime/src/runtime.ts
 +++ b/easytier-js/runtime/src/runtime.ts
 @@ -15,6 +15,9 @@ import {
@@ -227,7 +227,7 @@ index e2b7f26..91a0b3d 100644
    private instanceHandle = 0n;
    private exports: PromisingCoreExports | undefined;
    private memory: WebAssembly.Memory | undefined;
-@@ -261,6 +275,158 @@ export class EasyTierRuntime {
+@@ -261,6 +275,173 @@ export class EasyTierRuntime {
      return this.dataPlane.bindTcp(localPort, timeoutMilliseconds);
    }
  
@@ -289,6 +289,19 @@ index e2b7f26..91a0b3d 100644
 +      timeoutMilliseconds,
 +    );
 +    const requestPointer = await this.copyIntoGuest(encoded);
++    // 回读请求缓冲区，确认 guest 内存中的字节与发出的一致（诊断用）
++    this.lastRpcDebug = `req(${encoded.byteLength})=${Array.from(encoded)
++      .slice(0, 128)
++      .map((b) => b.toString(16).padStart(2, "0"))
++      .join("")}|echo=${Array.from(
++      new Uint8Array(
++        this.requireMemory().buffer,
++        requestPointer,
++        encoded.byteLength,
++      ).slice(0, 128),
++    )
++      .map((b) => b.toString(16).padStart(2, "0"))
++      .join("")}`;
 +    let outputPointer = 0;
 +    try {
 +      outputPointer = Number(await this.call("bufferAlloc", [8]));
@@ -364,7 +377,9 @@ index e2b7f26..91a0b3d 100644
 +            pointer,
 +            copied,
 +          ).slice();
-+          this.lastRpcDebug = `probe=${status} copied=${copied} hex=${Array.from(encoded)
++          this.lastRpcDebug += ` | probe=${status} copied=${copied} resp=${Array.from(
++            encoded,
++          )
 +            .slice(0, 256)
 +            .map((b) => b.toString(16).padStart(2, "0"))
 +            .join("")}`;
@@ -386,7 +401,7 @@ index e2b7f26..91a0b3d 100644
    stop(): Promise<void> {
      if (this.stopPromise !== undefined) {
        return this.stopPromise;
-@@ -713,6 +879,10 @@ export class EasyTierRuntime {
+@@ -713,6 +894,10 @@ export class EasyTierRuntime {
        dataPlaneResourceClose: wrapOptional(
          raw.easytier_data_plane_resource_close,
        ),
@@ -397,7 +412,7 @@ index e2b7f26..91a0b3d 100644
      };
    }
  
-@@ -804,3 +974,183 @@ export class EasyTierRuntime {
+@@ -804,3 +989,189 @@ export class EasyTierRuntime {
      return next;
    }
  }
@@ -464,19 +479,25 @@ index e2b7f26..91a0b3d 100644
 + */
 +function decodeRpcResponse(encoded: Uint8Array): Uint8Array {
 +  let response: Uint8Array = new Uint8Array();
++  let errorSeen = false;
 +  let errorMessage: string | undefined;
 +  forEachField(encoded, (field, wire, view) => {
 +    if (field === 1 && wire === 2) {
 +      response = view.bytes;
 +    } else if (field === 2 && wire === 2) {
++      errorSeen = true;
 +      const text = firstErrorText(view.bytes);
 +      if (text !== undefined) {
 +        errorMessage = text;
 +      }
 +    }
 +  });
-+  if (errorMessage !== undefined) {
-+    throw new Error(`guest RPC error: ${errorMessage}`);
++  if (errorSeen) {
++    throw new Error(
++      errorMessage === undefined
++        ? `guest RPC error (unparseable error field, envelope ${encoded.length}B)`
++        : `guest RPC error: ${errorMessage}`,
++    );
 +  }
 +  return response;
 +}
