@@ -189,7 +189,7 @@ index 0eb7608..58da3ff 100644
    close(): Promise<void>;
  }
 diff --git a/easytier-js/runtime/src/runtime.ts b/easytier-js/runtime/src/runtime.ts
-index e2b7f26..44234b3 100644
+index e2b7f26..1e5603e 100644
 --- a/easytier-js/runtime/src/runtime.ts
 +++ b/easytier-js/runtime/src/runtime.ts
 @@ -15,6 +15,9 @@ import {
@@ -234,7 +234,7 @@ index e2b7f26..44234b3 100644
    private instanceHandle = 0n;
    private exports: PromisingCoreExports | undefined;
    private memory: WebAssembly.Memory | undefined;
-@@ -261,6 +275,173 @@ export class EasyTierRuntime {
+@@ -261,6 +275,178 @@ export class EasyTierRuntime {
      return this.dataPlane.bindTcp(localPort, timeoutMilliseconds);
    }
  
@@ -347,6 +347,8 @@ index e2b7f26..44234b3 100644
 +  ): Promise<Uint8Array> {
 +    const deadline = Date.now() + timeoutMilliseconds;
 +    for (;;) {
++      // (0, 0) 探测：返回 0 表示响应已就绪且为空字节（例如空的成功响应），
++      // 返回 >0 为待读取长度，RPC_STATUS_PENDING 表示仍在执行
 +      const status = Number(
 +        await this.call("rpcResponseTake", [
 +          this.instanceHandle,
@@ -359,6 +361,9 @@ index e2b7f26..44234b3 100644
 +        throw new Error(
 +          await this.instanceError(`RPC response take (${status})`),
 +        );
++      }
++      if (status === 0) {
++        return new Uint8Array(0);
 +      }
 +      if (status > 0) {
 +        const pointer = Number(await this.call("bufferAlloc", [status]));
@@ -408,7 +413,7 @@ index e2b7f26..44234b3 100644
    stop(): Promise<void> {
      if (this.stopPromise !== undefined) {
        return this.stopPromise;
-@@ -713,6 +894,10 @@ export class EasyTierRuntime {
+@@ -713,6 +899,10 @@ export class EasyTierRuntime {
        dataPlaneResourceClose: wrapOptional(
          raw.easytier_data_plane_resource_close,
        ),
@@ -419,7 +424,7 @@ index e2b7f26..44234b3 100644
      };
    }
  
-@@ -804,3 +989,189 @@ export class EasyTierRuntime {
+@@ -804,3 +994,189 @@ export class EasyTierRuntime {
      return next;
    }
  }
