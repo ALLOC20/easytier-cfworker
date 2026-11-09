@@ -1,0 +1,111 @@
+name: Preview Deploy (test environment)
+
+# 测试环境：独立 worker（easytier-cfworker-preview）+ 独立 DO，
+# 走 workers.dev 域名，不绑自定义域、不动 WAF、不影响生产。
+# 手动触发，或在 feat/* / preview/* 分支推送时触发。
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "feat/**"
+      - "preview/**"
+    paths:
+      - ".github/workflows/preview.yml"
+      - "deploy/**"
+
+concurrency:
+  group: preview-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v5
+
+      - name: Checkout EasyTier source
+        uses: actions/checkout@v5
+        with:
+          repository: EasyTier/EasyTier
+          ref: main
+          fetch-depth: 1
+          path: EasyTier
+
+      - name: Patch runtime (hostname + management RPC)
+        run: git -C EasyTier apply --verbose "$GITHUB_WORKSPACE/deploy/runtime-hostname.patch"
+
+      - name: Setup Rust 1.95 + wasm32-wasip1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95
+          target: wasm32-wasip1
+          cache: false
+          rustflags: ""
+
+      - name: Setup protoc 35.1
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup pnpm 10
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm --dir EasyTier/easytier-js install --frozen-lockfile
+
+      - name: Apply relay config
+        run: |
+          cp deploy/worker.ts EasyTier/easytier-js/cloudflare/worker.ts
+          cp deploy/wrangler.jsonc EasyTier/easytier-js/cloudflare/wrangler.jsonc
+
+      - name: Build @easytier/cloudflare (wasm + packages)
+        run: pnpm --dir EasyTier/easytier-js --filter @easytier/cloudflare build
+
+      - name: Deploy preview worker
+        working-directory: EasyTier/easytier-js/cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          EASYTIER_NETWORK_NAME: ${{ secrets.EASYTIER_NETWORK_NAME }}
+          EASYTIER_NETWORK_SECRET: ${{ secrets.EASYTIER_NETWORK_SECRET }}
+          EASYTIER_ACCESS_TOKEN: ${{ secrets.EASYTIER_ACCESS_TOKEN }}
+          WAF_IP_WHITELIST: ${{ secrets.WAF_IP_WHITELIST }}
+        run: |
+          npx wrangler deploy --name easytier-cfworker-preview \
+            --var EASYTIER_IP_WHITELIST:"$WAF_IP_WHITELIST" \
+                  EASYTIER_OBJECT_NAME:"pv-preview" \
+                  EASYTIER_INSTANCE_NAME:"CF-WORKER-PREVIEW"
+          echo "$EASYTIER_NETWORK_NAME" | npx wrangler secret put EASYTIER_NETWORK_NAME --name easytier-cfworker-preview
+          echo "$EASYTIER_NETWORK_SECRET" | npx wrangler secret put EASYTIER_NETWORK_SECRET --name easytier-cfworker-preview
+          echo "$EASYTIER_ACCESS_TOKEN" | npx wrangler secret put EASYTIER_ACCESS_TOKEN --name easytier-cfworker-preview
+
+      - name: Health check (workers.dev)
+        working-directory: EasyTier/easytier-js/cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          SUBDOMAIN=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['subdomain'])")
+          PREVIEW_URL="easytier-cfworker-preview.$SUBDOMAIN.workers.dev"
+          echo "PREVIEW_URL=$PREVIEW_URL" >> "$GITHUB_ENV"
+          echo "preview URL: https://$PREVIEW_URL/health"
+          sleep 5
+          for i in 1 2 3 4 5 6; do
+            if curl -sf "https://$PREVIEW_URL/health"; then echo " <- OK (attempt $i)"; exit 0; fi
+            echo "attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "health check failed"
+          exit 1

@@ -1,8 +1,43 @@
 diff --git a/easytier-js/cloudflare/src/app.ts b/easytier-js/cloudflare/src/app.ts
-index fb21401..12bce57 100644
+index fb21401..6fd9fd6 100644
 --- a/easytier-js/cloudflare/src/app.ts
 +++ b/easytier-js/cloudflare/src/app.ts
-@@ -103,9 +103,12 @@ export function createCloudflareApplication<Env>(
+@@ -24,6 +24,34 @@ export function createCloudflareApplication<Env>(
+       const url = new URL(request.url);
+       const upgrade = request.headers.get("Upgrade");
+       if (upgrade?.toLowerCase() !== "websocket") {
++        // Internal management RPC relay: the edge worker forwards a serialized
++        // protobuf request body plus the full method name in the
++        // `x-easytier-rpc` header; the serialized protobuf response is
++        // returned raw. Method errors map to a 500 with the message.
++        const rpcMethod = request.headers.get("x-easytier-rpc");
++        if (rpcMethod !== null) {
++          try {
++            const runtime = await this.runtime();
++            const requestBytes = new Uint8Array(await request.arrayBuffer());
++            const output = await runtime.rpc(rpcMethod, requestBytes);
++            return new Response(output.buffer as ArrayBuffer, {
++              status: 200,
++              headers: { "content-type": "application/octet-stream" },
++            });
++          } catch (error) {
++            console.error(
++              JSON.stringify({
++                event: "easytier_cloudflare_rpc_failed",
++                method: rpcMethod,
++                error: String(error),
++              }),
++            );
++            return Response.json(
++              { ok: false, error: String(error) },
++              { status: 500 },
++            );
++          }
++        }
+         if (url.pathname !== "/health") {
+           return new Response("Not found", { status: 404 });
+         }
+@@ -103,9 +131,12 @@ export function createCloudflareApplication<Env>(
            profile: "cloudflare",
            instanceId,
            instanceName: config.instanceName ?? "easytier-cloudflare",
@@ -15,6 +50,44 @@ index fb21401..12bce57 100644
          },
        });
      }
+diff --git a/easytier-js/runtime/scripts/build-wasm.mjs b/easytier-js/runtime/scripts/build-wasm.mjs
+index db5466d..ab2c763 100644
+--- a/easytier-js/runtime/scripts/build-wasm.mjs
++++ b/easytier-js/runtime/scripts/build-wasm.mjs
+@@ -45,7 +45,7 @@ await new Promise((resolve, reject) => {
+       "--features",
+       browserBuild
+         ? "wasm-host-tunnel-outbound,aes-gcm,proxy-smoltcp-stack"
+-        : "wasm-host-tunnel,aes-gcm",
++        : "wasm-host-tunnel,management-rpc,aes-gcm",
+     ],
+     {
+       cwd: repositoryRoot,
+diff --git a/easytier-js/runtime/src/adapter.ts b/easytier-js/runtime/src/adapter.ts
+index b6040f5..d5598b6 100644
+--- a/easytier-js/runtime/src/adapter.ts
++++ b/easytier-js/runtime/src/adapter.ts
+@@ -2,6 +2,7 @@ import type {
+   EasyTierEvent,
+   EasyTierInstance,
+   EasyTierOperationOptions,
++  EasyTierRpcOptions,
+   EasyTierState,
+   EasyTierStatus,
+   EasyTierTcpListener,
+@@ -81,6 +82,12 @@ export async function createEasyTierRuntime(
+         connections: health.connections,
+       };
+     },
++    rpc: (
++      fullMethodName: string,
++      request: Uint8Array,
++      options?: EasyTierRpcOptions,
++    ): Promise<Uint8Array> =>
++      runtime.rpc(fullMethodName, request, options?.timeout),
+     close: () => runtime.stop(),
+     canAcceptWebSocket: () => runtime.canAcceptWebSocket(),
+     acceptWebSocket: (socket, metadata) =>
 diff --git a/easytier-js/runtime/src/config.ts b/easytier-js/runtime/src/config.ts
 index c839c7e..59cc567 100644
 --- a/easytier-js/runtime/src/config.ts
@@ -53,7 +126,7 @@ index c839c7e..59cc567 100644
    return lines.join("\n");
  }
 diff --git a/easytier-js/runtime/src/index.ts b/easytier-js/runtime/src/index.ts
-index 0eb7608..481a287 100644
+index 0eb7608..58da3ff 100644
 --- a/easytier-js/runtime/src/index.ts
 +++ b/easytier-js/runtime/src/index.ts
 @@ -10,6 +10,9 @@ export interface EasyTierNetworkConfig {
@@ -66,3 +139,422 @@ index 0eb7608..481a287 100644
  }
  
  export interface EasyTierEvent {
+@@ -27,6 +30,11 @@ export interface EasyTierOperationOptions {
+   timeout?: number;
+ }
+ 
++export interface EasyTierRpcOptions {
++  /** Timeout in milliseconds. Defaults to 10000. */
++  timeout?: number;
++}
++
+ export interface EasyTierIpv4SocketAddress {
+   ipv4: string;
+   port: number;
+@@ -62,5 +70,16 @@ export interface EasyTierInstance {
+     options?: EasyTierOperationOptions,
+   ): Promise<EasyTierTcpListener>;
+   status(): Promise<EasyTierStatus>;
++  /**
++   * Submits one protobuf management RPC (e.g. `api.instance.PeerManageRpc.ListPeer`)
++   * to the guest instance. `request` is the serialized protobuf input; the
++   * resolved value is the serialized protobuf output. Requires a guest built
++   * with the `management-rpc` feature.
++   */
++  rpc(
++    fullMethodName: string,
++    request: Uint8Array,
++    options?: EasyTierRpcOptions,
++  ): Promise<Uint8Array>;
+   close(): Promise<void>;
+ }
+diff --git a/easytier-js/runtime/src/runtime.ts b/easytier-js/runtime/src/runtime.ts
+index e2b7f26..fa55466 100644
+--- a/easytier-js/runtime/src/runtime.ts
++++ b/easytier-js/runtime/src/runtime.ts
+@@ -15,6 +15,9 @@ import {
+ 
+ const CORE_CONFIG_VERSION = 14;
+ const HOST_TUNNEL_ABI_VERSION = 1;
++const RPC_ABI_VERSION = 2;
++const RPC_STATUS_PENDING = -6;
++const RPC_POLL_INTERVAL_MS = 15;
+ const PACKET_SINK_HANDLE = 1n;
+ const EVENT_SINK_HANDLE = 2n;
+ const INSTANCE_RUNNING = 2;
+@@ -70,6 +73,10 @@ interface CoreExports {
+   easytier_data_plane_tcp_shutdown_write_result_take?: WasmCallable;
+   easytier_data_plane_operation_free?: WasmCallable;
+   easytier_data_plane_resource_close?: WasmCallable;
++  easytier_rpc_abi_version?: WasmCallable;
++  easytier_rpc_request_submit?: WasmCallable;
++  easytier_rpc_response_take?: WasmCallable;
++  easytier_rpc_operation_free?: WasmCallable;
+ }
+ 
+ interface PromisingCoreExports {
+@@ -106,6 +113,10 @@ interface PromisingCoreExports {
+   dataPlaneTcpShutdownWriteResultTake?: PromisingExport;
+   dataPlaneOperationFree?: PromisingExport;
+   dataPlaneResourceClose?: PromisingExport;
++  rpcAbiVersion?: PromisingExport;
++  rpcRequestSubmit?: PromisingExport;
++  rpcResponseTake?: PromisingExport;
++  rpcOperationFree?: PromisingExport;
+ }
+ 
+ export interface CoreHealth extends WebSocketHostHealth {
+@@ -261,6 +272,154 @@ export class EasyTierRuntime {
+     return this.dataPlane.bindTcp(localPort, timeoutMilliseconds);
+   }
+ 
++  /**
++   * Submits one protobuf management RPC to the guest instance and awaits its
++   * serialized response payload. The request must be the serialized protobuf
++   * input of `fullMethodName`; the resolved value is the serialized protobuf
++   * output. Method errors surface as thrown guest RPC errors.
++   */
++  async rpc(
++    fullMethodName: string,
++    request: Uint8Array,
++    timeoutMilliseconds = 10_000,
++  ): Promise<Uint8Array> {
++    await this.ready;
++    this.requireRunning();
++    const exports = this.exports;
++    if (
++      exports?.rpcRequestSubmit === undefined ||
++      exports.rpcResponseTake === undefined ||
++      exports.rpcOperationFree === undefined
++    ) {
++      throw new Error("this EasyTier guest does not include the management RPC");
++    }
++    const abiVersion = Number(
++      await this.call("rpcAbiVersion", []),
++    );
++    if (abiVersion !== RPC_ABI_VERSION) {
++      throw new Error(
++        `guest RPC ABI ${abiVersion} is unsupported; expected ${RPC_ABI_VERSION}`,
++      );
++    }
++    return this.enqueue(async () => {
++      this.requireRunning();
++      const operation = await this.rpcSubmit(
++        fullMethodName,
++        request,
++        timeoutMilliseconds,
++      );
++      try {
++        return await this.rpcAwait(operation, timeoutMilliseconds);
++      } finally {
++        await this.call("rpcOperationFree", [
++          this.instanceHandle,
++          operation,
++        ]).catch(() => {});
++      }
++    });
++  }
++
++  private async rpcSubmit(
++    fullMethodName: string,
++    request: Uint8Array,
++    timeoutMilliseconds: number,
++  ): Promise<bigint> {
++    const encoded = encodeDirectRpcRequest(
++      fullMethodName,
++      request,
++      timeoutMilliseconds,
++    );
++    const requestPointer = await this.copyIntoGuest(encoded);
++    let outputPointer = 0;
++    try {
++      outputPointer = Number(await this.call("bufferAlloc", [8]));
++      if (outputPointer === 0) {
++        throw new Error("guest buffer allocation failed");
++      }
++      const status = Number(
++        await this.call("rpcRequestSubmit", [
++          this.instanceHandle,
++          requestPointer,
++          encoded.byteLength,
++          outputPointer,
++        ]),
++      );
++      if (status !== 0) {
++        throw new Error(
++          await this.instanceError(`RPC submit (${status})`),
++        );
++      }
++      return new DataView(
++        this.requireMemory().buffer,
++        outputPointer,
++        8,
++      ).getBigUint64(0);
++    } finally {
++      if (outputPointer !== 0) {
++        await this.call("bufferFree", [outputPointer]);
++      }
++      await this.call("bufferFree", [requestPointer]);
++    }
++  }
++
++  private async rpcAwait(
++    operation: bigint,
++    timeoutMilliseconds: number,
++  ): Promise<Uint8Array> {
++    const deadline = Date.now() + timeoutMilliseconds;
++    for (;;) {
++      const status = Number(
++        await this.call("rpcResponseTake", [
++          this.instanceHandle,
++          operation,
++          0,
++          0,
++        ]),
++      );
++      if (status < 0 && status !== RPC_STATUS_PENDING) {
++        throw new Error(
++          await this.instanceError(`RPC response take (${status})`),
++        );
++      }
++      if (status > 0) {
++        const pointer = Number(await this.call("bufferAlloc", [status]));
++        if (pointer === 0) {
++          throw new Error("guest buffer allocation failed");
++        }
++        try {
++          const copied = Number(
++            await this.call("rpcResponseTake", [
++              this.instanceHandle,
++              operation,
++              pointer,
++              status,
++            ]),
++          );
++          if (copied < 0) {
++            throw new Error(
++              await this.instanceError(`RPC response take (${copied})`),
++            );
++          }
++          const encoded = new Uint8Array(
++            this.requireMemory().buffer,
++            pointer,
++            copied,
++          ).slice();
++          return decodeRpcResponse(encoded);
++        } finally {
++          await this.call("bufferFree", [pointer]);
++        }
++      }
++      if (Date.now() >= deadline) {
++        throw new Error(
++          `RPC ${timeoutMilliseconds}ms timeout exceeded while awaiting a response`,
++        );
++      }
++      await new Promise((resolve) => setTimeout(resolve, RPC_POLL_INTERVAL_MS));
++      await this.driveUntilIdle();
++    }
++  }
++
+   stop(): Promise<void> {
+     if (this.stopPromise !== undefined) {
+       return this.stopPromise;
+@@ -713,6 +872,10 @@ export class EasyTierRuntime {
+       dataPlaneResourceClose: wrapOptional(
+         raw.easytier_data_plane_resource_close,
+       ),
++      rpcAbiVersion: wrapOptional(raw.easytier_rpc_abi_version),
++      rpcRequestSubmit: wrapOptional(raw.easytier_rpc_request_submit),
++      rpcResponseTake: wrapOptional(raw.easytier_rpc_response_take),
++      rpcOperationFree: wrapOptional(raw.easytier_rpc_operation_free),
+     };
+   }
+ 
+@@ -804,3 +967,174 @@ export class EasyTierRuntime {
+     return next;
+   }
+ }
++
++/**
++ * Encodes `common.DirectRpcRequest`:
++ *   1: full_method_name (string), 2: request (bytes), 3: timeout_ms (uint64).
++ */
++function encodeDirectRpcRequest(
++  fullMethodName: string,
++  request: Uint8Array,
++  timeoutMilliseconds: number,
++): Uint8Array {
++  const nameBytes = new TextEncoder().encode(fullMethodName);
++  const lengthSize = (value: number): number => {
++    let size = 1;
++    while (value >= 0x80) {
++      value >>>= 7;
++      size += 1;
++    }
++    return size;
++  };
++  const varint = (buffer: Uint8Array, offset: number, value: number) => {
++    let position = offset;
++    let current = value;
++    while (current >= 0x80) {
++      buffer[position++] = (current & 0x7f) | 0x80;
++      current >>>= 7;
++    }
++    buffer[position] = current;
++    return position + 1;
++  };
++  const timeoutSize = lengthSize(timeoutMilliseconds);
++  const total =
++    1 +
++    lengthSize(nameBytes.byteLength) +
++    nameBytes.byteLength +
++    1 +
++    lengthSize(request.byteLength) +
++    request.byteLength +
++    1 +
++    timeoutSize;
++  const buffer = new Uint8Array(total);
++  let position = 0;
++  buffer[position++] = 0x0a;
++  position = varint(buffer, position, nameBytes.byteLength);
++  buffer.set(nameBytes, position);
++  position += nameBytes.byteLength;
++  buffer[position++] = 0x12;
++  position = varint(buffer, position, request.byteLength);
++  buffer.set(request, position);
++  position += request.byteLength;
++  buffer[position++] = 0x18;
++  varint(buffer, position, timeoutMilliseconds);
++  return buffer;
++}
++
++interface DecodedRpcEnvelope {
++  response: Uint8Array;
++  errorMessage: string | undefined;
++}
++
++/**
++ * Decodes `common.RpcResponse`:
++ *   1: response (bytes), 2: error.Error (message), 3: runtime_us (uint64).
++ * The error message is the first string field inside the error-kind
++ * submessage (every error variant carries its text at field 1 or 2).
++ */
++function decodeRpcResponse(encoded: Uint8Array): Uint8Array {
++  const envelope = parseEnvelope(encoded);
++  if (envelope.errorMessage === undefined) {
++    return envelope.response;
++  }
++  throw new Error(`guest RPC error: ${envelope.errorMessage}`);
++}
++
++function parseEnvelope(encoded: Uint8Array): DecodedRpcEnvelope {
++  let response: Uint8Array = new Uint8Array();
++  let errorMessage: string | undefined;
++  forEachField(encoded, (field, wire, view) => {
++    if (field === 1 && wire === 2) {
++      response = view.bytes;
++    } else if (field === 2 && wire === 2) {
++      const text = firstString(view.bytes);
++      if (text !== undefined) {
++        errorMessage = text;
++      }
++    }
++  });
++  return { response, errorMessage };
++}
++
++/** Finds the first non-empty length-delimited string field (1 or 2). */
++function firstString(encoded: Uint8Array): string | undefined {
++  let text: string | undefined;
++  forEachField(encoded, (field, wire, view) => {
++    if (text === undefined && wire === 2 && (field === 1 || field === 2)) {
++      const decoded = new TextDecoder().decode(view.bytes);
++      if (decoded.length > 0) {
++        text = decoded;
++      }
++    }
++  });
++  return text;
++}
++
++interface LengthDelimitedView {
++  bytes: Uint8Array;
++}
++
++type FieldVisitor = (
++  field: number,
++  wire: number,
++  view: LengthDelimitedView,
++) => void;
++
++/**
++ * Iterates protobuf fields. Length-delimited payloads are reported through
++ * `view.bytes` (a subarray of the input); varint and 32/64-bit fields only
++ * advance the cursor and pass a zero-length view.
++ */
++function forEachField(encoded: Uint8Array, visit: FieldVisitor): void {
++  let offset = 0;
++  while (offset < encoded.length) {
++    const [key, afterKey] = readVarint(encoded, offset);
++    const field = key >>> 3;
++    const wire = key & 0x07;
++    offset = afterKey;
++    if (wire === 0) {
++      const [, next] = readVarint(encoded, offset);
++      offset = next;
++      visit(field, wire, { bytes: new Uint8Array() });
++    } else if (wire === 1) {
++      offset += 8;
++      visit(field, wire, { bytes: new Uint8Array() });
++    } else if (wire === 2) {
++      const [size, next] = readVarint(encoded, offset);
++      offset = next;
++      visit(field, wire, {
++        bytes: encoded.subarray(offset, offset + size),
++      });
++      offset += size;
++    } else if (wire === 5) {
++      offset += 4;
++      visit(field, wire, { bytes: new Uint8Array() });
++    } else {
++      throw new Error(`unsupported protobuf wire type ${wire}`);
++    }
++  }
++}
++
++function readVarint(
++  buffer: Uint8Array,
++  offset: number,
++): [number, number] {
++  let value = 0;
++  let shift = 0;
++  let position = offset;
++  for (;;) {
++    const byte = buffer[position];
++    if (byte === undefined) {
++      throw new Error("protobuf data ended inside a varint");
++    }
++    position += 1;
++    value += (byte & 0x7f) * 2 ** shift;
++    if ((byte & 0x80) === 0) {
++      return [value, position];
++    }
++    shift += 7;
++    if (shift > 63) {
++      throw new Error("protobuf varint is too long");
++    }
++  }
++}
+diff --git a/easytier-js/runtime/test/build-profile.test.ts b/easytier-js/runtime/test/build-profile.test.ts
+index 2bc8e7e..840632e 100644
+--- a/easytier-js/runtime/test/build-profile.test.ts
++++ b/easytier-js/runtime/test/build-profile.test.ts
+@@ -9,7 +9,7 @@ describe("Cloudflare Worker WASM build profile", () => {
+       "utf8",
+     );
+ 
+-    expect(buildScript).toContain('"wasm-host-tunnel,aes-gcm"');
++    expect(buildScript).toContain('"wasm-host-tunnel,management-rpc,aes-gcm"');
+     expect(buildScript).toContain(
+       '"wasm-host-tunnel-outbound,aes-gcm,proxy-smoltcp-stack"',
+     );
