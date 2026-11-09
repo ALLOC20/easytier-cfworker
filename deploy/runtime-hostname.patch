@@ -1,8 +1,8 @@
 diff --git a/easytier-js/cloudflare/src/app.ts b/easytier-js/cloudflare/src/app.ts
-index fb21401..6fd9fd6 100644
+index fb21401..337df96 100644
 --- a/easytier-js/cloudflare/src/app.ts
 +++ b/easytier-js/cloudflare/src/app.ts
-@@ -24,6 +24,34 @@ export function createCloudflareApplication<Env>(
+@@ -24,6 +24,37 @@ export function createCloudflareApplication<Env>(
        const url = new URL(request.url);
        const upgrade = request.headers.get("Upgrade");
        if (upgrade?.toLowerCase() !== "websocket") {
@@ -16,9 +16,12 @@ index fb21401..6fd9fd6 100644
 +            const runtime = await this.runtime();
 +            const requestBytes = new Uint8Array(await request.arrayBuffer());
 +            const output = await runtime.rpc(rpcMethod, requestBytes);
-+            return new Response(output.buffer as ArrayBuffer, {
++            return new Response(output as unknown as BodyInit, {
 +              status: 200,
-+              headers: { "content-type": "application/octet-stream" },
++              headers: {
++                "content-type": "application/octet-stream",
++                "x-rpc-debug": runtime.lastRpcDebug() ?? "",
++              },
 +            });
 +          } catch (error) {
 +            console.error(
@@ -37,7 +40,7 @@ index fb21401..6fd9fd6 100644
          if (url.pathname !== "/health") {
            return new Response("Not found", { status: 404 });
          }
-@@ -103,9 +131,12 @@ export function createCloudflareApplication<Env>(
+@@ -103,9 +134,12 @@ export function createCloudflareApplication<Env>(
            profile: "cloudflare",
            instanceId,
            instanceName: config.instanceName ?? "easytier-cloudflare",
@@ -64,7 +67,7 @@ index db5466d..ab2c763 100644
      {
        cwd: repositoryRoot,
 diff --git a/easytier-js/runtime/src/adapter.ts b/easytier-js/runtime/src/adapter.ts
-index b6040f5..d5598b6 100644
+index b6040f5..bfd66a9 100644
 --- a/easytier-js/runtime/src/adapter.ts
 +++ b/easytier-js/runtime/src/adapter.ts
 @@ -2,6 +2,7 @@ import type {
@@ -75,7 +78,16 @@ index b6040f5..d5598b6 100644
    EasyTierState,
    EasyTierStatus,
    EasyTierTcpListener,
-@@ -81,6 +82,12 @@ export async function createEasyTierRuntime(
+@@ -26,6 +27,8 @@ export interface RuntimeAdapter extends EasyTierInstance {
+     socket: RuntimeWebSocket,
+     metadata: HostTunnelMetadata,
+   ): Promise<void>;
++  /** Diagnostics from the most recent rpc() call (debug builds). */
++  lastRpcDebug(): string | undefined;
+ }
+ 
+ export interface CreateRuntimeOptions {
+@@ -81,6 +84,13 @@ export async function createEasyTierRuntime(
          connections: health.connections,
        };
      },
@@ -85,6 +97,7 @@ index b6040f5..d5598b6 100644
 +      options?: EasyTierRpcOptions,
 +    ): Promise<Uint8Array> =>
 +      runtime.rpc(fullMethodName, request, options?.timeout),
++    lastRpcDebug: () => runtime.lastRpcDebug,
      close: () => runtime.stop(),
      canAcceptWebSocket: () => runtime.canAcceptWebSocket(),
      acceptWebSocket: (socket, metadata) =>
@@ -169,7 +182,7 @@ index 0eb7608..58da3ff 100644
    close(): Promise<void>;
  }
 diff --git a/easytier-js/runtime/src/runtime.ts b/easytier-js/runtime/src/runtime.ts
-index e2b7f26..fa55466 100644
+index e2b7f26..6973075 100644
 --- a/easytier-js/runtime/src/runtime.ts
 +++ b/easytier-js/runtime/src/runtime.ts
 @@ -15,6 +15,9 @@ import {
@@ -204,7 +217,17 @@ index e2b7f26..fa55466 100644
  }
  
  export interface CoreHealth extends WebSocketHostHealth {
-@@ -261,6 +272,154 @@ export class EasyTierRuntime {
+@@ -117,6 +128,9 @@ export class EasyTierRuntime {
+   private readonly host: WebSocketHost;
+   readonly ready: Promise<void>;
+ 
++  /** Diagnostics from the most recent rpc() call (hex of the raw envelope). */
++  lastRpcDebug: string | undefined;
++
+   private instanceHandle = 0n;
+   private exports: PromisingCoreExports | undefined;
+   private memory: WebAssembly.Memory | undefined;
+@@ -261,6 +275,158 @@ export class EasyTierRuntime {
      return this.dataPlane.bindTcp(localPort, timeoutMilliseconds);
    }
  
@@ -341,6 +364,10 @@ index e2b7f26..fa55466 100644
 +            pointer,
 +            copied,
 +          ).slice();
++          this.lastRpcDebug = `probe=${status} copied=${copied} hex=${Array.from(encoded)
++            .slice(0, 256)
++            .map((b) => b.toString(16).padStart(2, "0"))
++            .join("")}`;
 +          return decodeRpcResponse(encoded);
 +        } finally {
 +          await this.call("bufferFree", [pointer]);
@@ -359,7 +386,7 @@ index e2b7f26..fa55466 100644
    stop(): Promise<void> {
      if (this.stopPromise !== undefined) {
        return this.stopPromise;
-@@ -713,6 +872,10 @@ export class EasyTierRuntime {
+@@ -713,6 +879,10 @@ export class EasyTierRuntime {
        dataPlaneResourceClose: wrapOptional(
          raw.easytier_data_plane_resource_close,
        ),
@@ -370,7 +397,7 @@ index e2b7f26..fa55466 100644
      };
    }
  
-@@ -804,3 +967,174 @@ export class EasyTierRuntime {
+@@ -804,3 +974,174 @@ export class EasyTierRuntime {
      return next;
    }
  }

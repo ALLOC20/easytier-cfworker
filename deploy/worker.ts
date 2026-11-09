@@ -155,75 +155,6 @@ function encodeDirectRpcRequest(
   return new Uint8Array(out);
 }
 
-/** 解包 common.RpcResponse：1 响应(bytes)，2 错误(Error)，3 耗时(uint64) */
-function decodeRpcEnvelope(encoded: Uint8Array): Uint8Array {
-  let response: Uint8Array | undefined;
-  let errorText: string | undefined;
-  forEachField(encoded, (field, wire, view) => {
-    if (field === 1 && wire === 2) {
-      response = view.bytes;
-    } else if (field === 2 && wire === 2) {
-      errorText = firstErrorString(view.bytes) ?? errorText;
-    }
-  });
-  if (errorText !== undefined) {
-    throw new Error(`内核 RPC 错误: ${errorText}`);
-  }
-  if (response === undefined) {
-    throw new Error("内核 RPC 响应缺少 payload");
-  }
-  return response;
-}
-
-/**
- * 提取 error.Error 的文本：Error{1..8: 变体子消息}，变体子消息的字段 1/2
- * 携带错误字符串。子消息以 tag 字节开头（<0x20），据此区分文本与嵌套消息，
- * 最多下钻两层。
- */
-function firstErrorString(error: Uint8Array): string | undefined {
-  let text: string | undefined;
-  forEachField(error, (field, wire, view) => {
-    if (text !== undefined || wire !== 2 || (field !== 1 && field !== 2)) {
-      return;
-    }
-    const decoded = new TextDecoder().decode(view.bytes);
-    if (isPrintable(decoded)) {
-      text = decoded;
-      return;
-    }
-    // 变体子消息：再下钻一层取其字符串字段
-    let nested: string | undefined;
-    forEachField(view.bytes, (innerField, innerWire, innerView) => {
-      if (
-        nested !== undefined ||
-        innerWire !== 2 ||
-        (innerField !== 1 && innerField !== 2)
-      ) {
-        return;
-      }
-      const inner = new TextDecoder().decode(innerView.bytes);
-      if (isPrintable(inner)) {
-        nested = inner;
-      }
-    });
-    text = nested;
-  });
-  return text;
-}
-
-function isPrintable(text: string): boolean {
-  if (text.length === 0) {
-    return false;
-  }
-  for (const ch of text) {
-    const code = ch.charCodeAt(0);
-    if (code < 0x20 || code === 0x7f) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // ---- 声明式消息解码（显式字段号 → JSON 键） ----
 
 interface FieldSpec {
@@ -650,18 +581,24 @@ async function handleCliRequest(
     );
   }
 
+  // runtime.rpc() 已解包 RpcResponse 信封（错误已转为异常），这里直接拿到
+  // 响应消息的 protobuf 字节
   const encoded = new Uint8Array(await response.arrayBuffer());
+  const debug = response.headers.get("x-rpc-debug") ?? undefined;
   let payload: Record<string, unknown>;
   try {
-    payload = definition.decode(decodeRpcEnvelope(encoded)) as Record<string, unknown>;
+    payload = definition.decode(encoded) as Record<string, unknown>;
   } catch (error) {
     const hex = Array.from(encoded)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
     return Response.json(
-      { ok: false, error: String(error), raw_hex: hex.slice(0, 2048) },
+      { ok: false, error: String(error), raw_hex: hex.slice(0, 2048), debug },
       { status: 502 },
     );
+  }
+  if (debug !== undefined) {
+    payload._debug = debug;
   }
   return Response.json(
     { ok: true, command, ...payload },
