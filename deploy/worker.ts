@@ -577,21 +577,14 @@ async function handleCliRequest(
   // runtime.rpc() 已解包 RpcResponse 信封（错误已转为异常），这里直接拿到
   // 响应消息的 protobuf 字节
   const encoded = new Uint8Array(await response.arrayBuffer());
-  const debug = response.headers.get("x-rpc-debug") ?? undefined;
   let payload: Record<string, unknown>;
   try {
     payload = definition.decode(encoded) as Record<string, unknown>;
   } catch (error) {
-    const hex = Array.from(encoded)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
     return Response.json(
-      { ok: false, error: String(error), raw_hex: hex.slice(0, 2048), debug },
+      { ok: false, error: String(error) },
       { status: 502 },
     );
-  }
-  if (debug !== undefined) {
-    payload._debug = debug;
   }
   return Response.json(
     { ok: true, command, ...payload },

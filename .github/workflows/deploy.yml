@@ -203,12 +203,20 @@ jobs:
           if whitelist:
               geo = f'({geo} or ip.src in {{{" ".join(whitelist)}}})'
 
+          # CLI 命令透传：GET /<访问令牌>/<只读子命令>，同样受地域限制
+          cli_paths = "peer|route|connector|node|dump-route|foreign-network|public-ipv6"
+          cli_expr = (
+              f'(http.request.method eq "GET" and '
+              f'http.request.uri.path matches "^/[0-9a-f]{{40,64}}/({cli_paths})$" and {geo})'
+          )
+
           rule = {
               "description": rule_desc,
               "expression": (
                   f'({host_expr}) and not '
                   f'(http.request.uri.path eq "/health" or '
-                  f'(lower(http.request.headers["upgrade"][0]) contains "websocket" and {geo}))'
+                  f'(lower(http.request.headers["upgrade"][0]) contains "websocket" and {geo}) or '
+                  f'{cli_expr})'
               ),
               "action": "block",
               "enabled": True,
