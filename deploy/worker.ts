@@ -655,8 +655,11 @@ async function handleCliRequest(
   try {
     payload = definition.decode(decodeRpcEnvelope(encoded)) as Record<string, unknown>;
   } catch (error) {
+    const hex = Array.from(encoded)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
     return Response.json(
-      { ok: false, error: String(error) },
+      { ok: false, error: String(error), raw_hex: hex.slice(0, 2048) },
       { status: 502 },
     );
   }
