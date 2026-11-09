@@ -1,0 +1,68 @@
+diff --git a/easytier-js/cloudflare/src/app.ts b/easytier-js/cloudflare/src/app.ts
+index fb21401..12bce57 100644
+--- a/easytier-js/cloudflare/src/app.ts
++++ b/easytier-js/cloudflare/src/app.ts
+@@ -103,9 +103,12 @@ export function createCloudflareApplication<Env>(
+           profile: "cloudflare",
+           instanceId,
+           instanceName: config.instanceName ?? "easytier-cloudflare",
++          hostname: config.hostname,
+           networkName: config.networkName,
+           networkSecret: config.networkSecret,
+           encryption: config.encryption ?? true,
++          relayNetworkWhitelist: config.relayNetworkWhitelist,
++          privateMode: config.privateMode,
+         },
+       });
+     }
+diff --git a/easytier-js/runtime/src/config.ts b/easytier-js/runtime/src/config.ts
+index c839c7e..59cc567 100644
+--- a/easytier-js/runtime/src/config.ts
++++ b/easytier-js/runtime/src/config.ts
+@@ -4,6 +4,9 @@ export interface RuntimeInstanceConfig {
+   profile: RuntimeProfile;
+   instanceId: string;
+   instanceName: string;
++  hostname?: string;
++  relayNetworkWhitelist?: string;
++  privateMode?: boolean;
+   networkName: string;
+   networkSecret: string;
+   encryption: boolean;
+@@ -21,6 +24,9 @@ export function encodeRuntimeConfig(config: RuntimeInstanceConfig): string {
+     `instance_id = ${quote(config.instanceId)}`,
+     `instance_name = ${quote(config.instanceName)}`,
+   ];
++  if (config.hostname) {
++    lines.push(`hostname = ${quote(config.hostname)}`);
++  }
+ 
+   if (config.profile === "browser") {
+     const ipv4 = config.ipv4;
+@@ -64,6 +70,12 @@ export function encodeRuntimeConfig(config: RuntimeInstanceConfig): string {
+   lines.push("disable_p2p = true");
+   lines.push(`enable_encryption = ${config.encryption}`);
+   lines.push("bind_device = false");
++  if (config.relayNetworkWhitelist !== undefined) {
++    lines.push(`relay_network_whitelist = ${quote(config.relayNetworkWhitelist)}`);
++  }
++  if (config.privateMode !== undefined) {
++    lines.push(`private_mode = ${config.privateMode}`);
++  }
+   lines.push("");
+   return lines.join("\n");
+ }
+diff --git a/easytier-js/runtime/src/index.ts b/easytier-js/runtime/src/index.ts
+index 0eb7608..481a287 100644
+--- a/easytier-js/runtime/src/index.ts
++++ b/easytier-js/runtime/src/index.ts
+@@ -10,6 +10,9 @@ export interface EasyTierNetworkConfig {
+   networkSecret: string;
+   instanceName?: string;
+   encryption?: boolean;
++  hostname?: string;
++  relayNetworkWhitelist?: string;
++  privateMode?: boolean;
+ }
+ 
+ export interface EasyTierEvent {

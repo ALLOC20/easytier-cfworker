@@ -1,0 +1,229 @@
+name: Deploy EasyTier Cloudflare Relay
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy.yml"
+      - "deploy/**"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-relay
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v5
+
+      - name: Checkout EasyTier source
+        uses: actions/checkout@v5
+        with:
+          repository: EasyTier/EasyTier
+          ref: main
+          fetch-depth: 1
+          path: EasyTier
+
+      - name: Patch runtime (hostname support)
+        run: git -C EasyTier apply --verbose "$GITHUB_WORKSPACE/deploy/runtime-hostname.patch"
+
+      - name: Setup Rust 1.95 + wasm32-wasip1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95
+          target: wasm32-wasip1
+          cache: false
+          rustflags: ""
+
+      - name: Setup protoc 35.1
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup pnpm 10
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm --dir EasyTier/easytier-js install --frozen-lockfile
+
+      - name: Apply relay config
+        run: |
+          cp deploy/worker.ts EasyTier/easytier-js/cloudflare/worker.ts
+          cp deploy/wrangler.jsonc EasyTier/easytier-js/cloudflare/wrangler.jsonc
+
+      - name: Build @easytier/cloudflare (wasm + packages)
+        run: pnpm --dir EasyTier/easytier-js --filter @easytier/cloudflare build
+
+      - name: Deploy to Cloudflare
+        working-directory: EasyTier/easytier-js/cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          EASYTIER_NETWORK_NAME: ${{ secrets.EASYTIER_NETWORK_NAME }}
+          EASYTIER_NETWORK_SECRET: ${{ secrets.EASYTIER_NETWORK_SECRET }}
+          EASYTIER_ACCESS_TOKEN: ${{ secrets.EASYTIER_ACCESS_TOKEN }}
+          WAF_IP_WHITELIST: ${{ secrets.WAF_IP_WHITELIST }}
+          WAF_ZONE_NAME: ${{ secrets.WAF_ZONE_NAME }}
+          WORKER_CUSTOM_DOMAINS: ${{ secrets.WORKER_CUSTOM_DOMAINS }}
+          WORKER_HEALTH_URL: ${{ secrets.WORKER_HEALTH_URL }}
+        run: |
+          # EASYTIER_* 明文 vars 不参与代码逻辑（除 IP 白名单外），仅作为配置的
+          # 可视化存档：Cloudflare dashboard → worker → Settings → Variables 可查，
+          # 对外不暴露。GitHub 侧这些值全部在 Secrets 中（public 仓库 Variables 任何人可读）。
+          npx wrangler deploy \
+            --var EASYTIER_IP_WHITELIST:"$WAF_IP_WHITELIST" \
+                  EASYTIER_ZONE_NAME:"$WAF_ZONE_NAME" \
+                  EASYTIER_CUSTOM_DOMAINS:"$WORKER_CUSTOM_DOMAINS" \
+                  EASYTIER_HEALTH_URL:"$WORKER_HEALTH_URL"
+          echo "$EASYTIER_NETWORK_NAME" | npx wrangler secret put EASYTIER_NETWORK_NAME --name easytier-cfworker
+          echo "$EASYTIER_NETWORK_SECRET" | npx wrangler secret put EASYTIER_NETWORK_SECRET --name easytier-cfworker
+          echo "$EASYTIER_ACCESS_TOKEN" | npx wrangler secret put EASYTIER_ACCESS_TOKEN --name easytier-cfworker
+
+      - name: Ensure worker custom domains (deploy removes undeclared ones; kept in Secrets)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WAF_ZONE_NAME: ${{ secrets.WAF_ZONE_NAME }}
+          WORKER_CUSTOM_DOMAINS: ${{ secrets.WORKER_CUSTOM_DOMAINS }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, urllib.request, urllib.error
+
+          token = os.environ["CLOUDFLARE_API_TOKEN"]
+          account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+          zone_name = os.environ.get("WAF_ZONE_NAME", "").strip()
+          hostnames = [h for h in os.environ.get("WORKER_CUSTOM_DOMAINS", "").split() if h]
+          if not zone_name or not hostnames:
+              print("WARN: WAF_ZONE_NAME / WORKER_CUSTOM_DOMAINS secrets not set; skip custom domain binding")
+              raise SystemExit(0)
+
+          def req(url, method="GET", data=None):
+              r = urllib.request.Request(url, method=method,
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                  data=json.dumps(data).encode() if data else None)
+              try:
+                  with urllib.request.urlopen(r) as resp: return json.loads(resp.read() or b"{}")
+              except urllib.error.HTTPError as e: return json.loads(e.read() or b"{}")
+
+          zones = req(f"https://api.cloudflare.com/client/v4/zones?name={zone_name}").get("result") or []
+          if not zones:
+              print(f"WARN: zone {zone_name} not found; skip custom domain binding")
+              raise SystemExit(0)
+          zone_id = zones[0]["id"]
+
+          service = "easytier-cfworker"
+          for h in hostnames:
+              res = req(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/domains",
+                        "PUT", {"zone_id": zone_id, "hostname": h, "service": service,
+                                "environment": "production"})
+              print(h, "->", "OK" if res.get("success") else res.get("errors"))
+          PYEOF
+      - name: Upload built packages (for local debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: easytier-js-built
+          path: |
+            EasyTier/easytier-js/runtime/dist
+            EasyTier/easytier-js/runtime/package.json
+            EasyTier/easytier-js/cloudflare/dist
+            EasyTier/easytier-js/cloudflare/package.json
+
+      - name: Show deployment
+        working-directory: EasyTier/easytier-js/cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          HEALTH_URL: ${{ secrets.WORKER_HEALTH_URL }}
+          EASYTIER_NETWORK_NAME: ${{ secrets.EASYTIER_NETWORK_NAME }}
+          EASYTIER_NETWORK_SECRET: ${{ secrets.EASYTIER_NETWORK_SECRET }}
+        run: |
+          npx wrangler deployments list
+          echo "=== Health check (DO restarts after deploy; retry for up to ~1min) ==="
+          sleep 5
+          if [ -n "$HEALTH_URL" ]; then
+            for i in 1 2 3 4 5 6; do
+              if curl -sf "https://$HEALTH_URL/health"; then echo " <- OK (attempt $i)"; break; fi
+              echo "attempt $i failed, retrying in 10s..."
+              sleep 10
+            done
+          fi
+
+      - name: Apply WAF allowlist (CN + IP whitelist; only /health and WebSocket)
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          WAF_ZONE_NAME: ${{ secrets.WAF_ZONE_NAME }}
+          WAF_HOSTS: ${{ secrets.WAF_HOSTS }}
+          WAF_IP_WHITELIST: ${{ secrets.WAF_IP_WHITELIST }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, urllib.request, urllib.error
+
+          token = os.environ["CLOUDFLARE_API_TOKEN"]
+          zone_name = os.environ.get("WAF_ZONE_NAME", "").strip()
+          hosts = [h for h in os.environ.get("WAF_HOSTS", "").split() if h]
+          if not zone_name or not hosts:
+              print("WARN: WAF_ZONE_NAME / WAF_HOSTS repo variables are not set; "
+                    "skip WAF maintenance (existing rule left untouched)")
+              raise SystemExit(0)
+          host_expr = "http.host in {" + " ".join(f'"{h}"' for h in hosts) + "}" if hosts else "false"
+          rule_desc = "easytier-cfworker: only /health and websocket"
+
+          def req(url, method="GET", data=None):
+              r = urllib.request.Request(
+                  url, method=method,
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                  data=json.dumps(data).encode() if data else None)
+              try:
+                  with urllib.request.urlopen(r) as resp:
+                      return json.loads(resp.read() or b"{}")
+              except urllib.error.HTTPError as e:
+                  return json.loads(e.read() or b"{}")
+
+          zones = req(f"https://api.cloudflare.com/client/v4/zones?name={zone_name}").get("result") or []
+          if not zones:
+              print(f"WARN: zone {zone_name} not found or token lacks Zone.Read; WAF rule not applied")
+              raise SystemExit(1)
+          zone_id = zones[0]["id"]
+          phase = "http_request_firewall_custom"
+
+          whitelist = [s.strip() for s in os.environ.get("WAF_IP_WHITELIST", "").split(",") if s.strip()]
+          geo = 'ip.geoip.country eq "CN"'
+          if whitelist:
+              geo = f'({geo} or ip.src in {{{" ".join(whitelist)}}})'
+
+          rule = {
+              "description": rule_desc,
+              "expression": (
+                  f'({host_expr}) and not '
+                  f'(http.request.uri.path eq "/health" or '
+                  f'(lower(http.request.headers["upgrade"][0]) contains "websocket" and {geo}))'
+              ),
+              "action": "block",
+              "enabled": True,
+          }
+          ep = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/rulesets/phases/{phase}/entrypoint"
+          cur = req(ep)
+          if not cur.get("success"):
+              body = {"rules": [rule]}
+          else:
+              rules = [r for r in cur["result"].get("rules", []) if r.get("description") != rule_desc]
+              rules.append(rule)
+              body = {"rules": rules}
+          res = req(ep, "PUT", body)
+          print("WAF rule result:", "OK" if res.get("success") else res.get("errors"))
+          print("IP whitelist applied:", whitelist or "(empty)")
+          if not res.get("success"):
+              print("WARN: 请给 API Token 添加权限：区域(Zone) -> Zone WAF -> Edit")
+          PYEOF
