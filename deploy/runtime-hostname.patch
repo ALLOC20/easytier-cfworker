@@ -182,7 +182,7 @@ index 0eb7608..58da3ff 100644
    close(): Promise<void>;
  }
 diff --git a/easytier-js/runtime/src/runtime.ts b/easytier-js/runtime/src/runtime.ts
-index e2b7f26..6973075 100644
+index e2b7f26..91a0b3d 100644
 --- a/easytier-js/runtime/src/runtime.ts
 +++ b/easytier-js/runtime/src/runtime.ts
 @@ -15,6 +15,9 @@ import {
@@ -397,7 +397,7 @@ index e2b7f26..6973075 100644
      };
    }
  
-@@ -804,3 +974,174 @@ export class EasyTierRuntime {
+@@ -804,3 +974,183 @@ export class EasyTierRuntime {
      return next;
    }
  }
@@ -455,53 +455,62 @@ index e2b7f26..6973075 100644
 +  return buffer;
 +}
 +
-+interface DecodedRpcEnvelope {
-+  response: Uint8Array;
-+  errorMessage: string | undefined;
-+}
-+
 +/**
 + * Decodes `common.RpcResponse`:
 + *   1: response (bytes), 2: error.Error (message), 3: runtime_us (uint64).
-+ * The error message is the first string field inside the error-kind
-+ * submessage (every error variant carries its text at field 1 or 2).
++ * The error text lives inside the error-kind submessage
++ * (Error{1..8: variant}, variant{1|2: text}); submessages start with a tag
++ * byte (<0x20), which distinguishes them from plain text.
 + */
 +function decodeRpcResponse(encoded: Uint8Array): Uint8Array {
-+  const envelope = parseEnvelope(encoded);
-+  if (envelope.errorMessage === undefined) {
-+    return envelope.response;
-+  }
-+  throw new Error(`guest RPC error: ${envelope.errorMessage}`);
-+}
-+
-+function parseEnvelope(encoded: Uint8Array): DecodedRpcEnvelope {
 +  let response: Uint8Array = new Uint8Array();
 +  let errorMessage: string | undefined;
 +  forEachField(encoded, (field, wire, view) => {
 +    if (field === 1 && wire === 2) {
 +      response = view.bytes;
 +    } else if (field === 2 && wire === 2) {
-+      const text = firstString(view.bytes);
++      const text = firstErrorText(view.bytes);
 +      if (text !== undefined) {
 +        errorMessage = text;
 +      }
 +    }
 +  });
-+  return { response, errorMessage };
++  if (errorMessage !== undefined) {
++    throw new Error(`guest RPC error: ${errorMessage}`);
++  }
++  return response;
 +}
 +
-+/** Finds the first non-empty length-delimited string field (1 or 2). */
-+function firstString(encoded: Uint8Array): string | undefined {
++/** Finds the first printable string field, descending into submessages. */
++function firstErrorText(encoded: Uint8Array, depth = 2): string | undefined {
 +  let text: string | undefined;
 +  forEachField(encoded, (field, wire, view) => {
-+    if (text === undefined && wire === 2 && (field === 1 || field === 2)) {
-+      const decoded = new TextDecoder().decode(view.bytes);
-+      if (decoded.length > 0) {
-+        text = decoded;
-+      }
++    if (text !== undefined || wire !== 2 || (field !== 1 && field !== 2)) {
++      return;
++    }
++    const decoded = new TextDecoder().decode(view.bytes);
++    if (isPrintable(decoded)) {
++      text = decoded;
++      return;
++    }
++    if (depth > 0) {
++      text = firstErrorText(view.bytes, depth - 1) ?? text;
 +    }
 +  });
 +  return text;
++}
++
++function isPrintable(text: string): boolean {
++  if (text.length === 0) {
++    return false;
++  }
++  for (const ch of text) {
++    const code = ch.charCodeAt(0);
++    if (code < 0x20 || code === 0x7f) {
++      return false;
++    }
++  }
++  return true;
 +}
 +
 +interface LengthDelimitedView {
