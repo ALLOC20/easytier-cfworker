@@ -1,8 +1,8 @@
 diff --git a/easytier-js/cloudflare/src/app.ts b/easytier-js/cloudflare/src/app.ts
-index fb21401..337df96 100644
+index fb21401..7d5cda7 100644
 --- a/easytier-js/cloudflare/src/app.ts
 +++ b/easytier-js/cloudflare/src/app.ts
-@@ -24,6 +24,37 @@ export function createCloudflareApplication<Env>(
+@@ -24,6 +24,44 @@ export function createCloudflareApplication<Env>(
        const url = new URL(request.url);
        const upgrade = request.headers.get("Upgrade");
        if (upgrade?.toLowerCase() !== "websocket") {
@@ -24,15 +24,22 @@ index fb21401..337df96 100644
 +              },
 +            });
 +          } catch (error) {
++            let debug: string | undefined;
++            try {
++              debug = (await this.runtime()).lastRpcDebug();
++            } catch {
++              debug = undefined;
++            }
 +            console.error(
 +              JSON.stringify({
 +                event: "easytier_cloudflare_rpc_failed",
 +                method: rpcMethod,
 +                error: String(error),
++                debug,
 +              }),
 +            );
 +            return Response.json(
-+              { ok: false, error: String(error) },
++              { ok: false, error: String(error), debug },
 +              { status: 500 },
 +            );
 +          }
@@ -40,7 +47,7 @@ index fb21401..337df96 100644
          if (url.pathname !== "/health") {
            return new Response("Not found", { status: 404 });
          }
-@@ -103,9 +134,12 @@ export function createCloudflareApplication<Env>(
+@@ -103,9 +141,12 @@ export function createCloudflareApplication<Env>(
            profile: "cloudflare",
            instanceId,
            instanceName: config.instanceName ?? "easytier-cloudflare",
