@@ -321,6 +321,7 @@ function decodeMessageAt(
           const p3 = hex(parts[3] ?? 0);
           const raw =
             p0 +
+            "-" +
             p1.slice(0, 4) +
             "-" +
             p1.slice(4) +
@@ -330,7 +331,7 @@ function decodeMessageAt(
             p2.slice(4) +
             "-" +
             p3.slice(0, 12);
-          assign(entry.name, raw);
+          assign(entry.name, raw, entry.repeated);
         }
         break;
       }
