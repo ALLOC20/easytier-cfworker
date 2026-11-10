@@ -56,19 +56,19 @@ P2P when hole punching succeeds and is relayed through the Worker otherwise.
 
 ### Four Protection Layers
 
-Only connections that "reach the edge + carry a token + use correct credentials" ever join
-the network (no geo or IP restrictions):
+Only connections that "reach the edge + carry a token" can use this node (the kernel does
+not verify network name/secret — any EasyTier client may handshake and relay through it):
 
 | Layer | Mechanism | Blocks |
 |---|---|---|
 | 1. Cloudflare WAF | Only `/health`, WebSocket upgrades and read-only CLI query paths pass | Scanners, crawlers, other paths |
 | 2. Worker access token | URL must carry your secret Access Token | Everything tokenless — rejected **before** the EasyTier handshake |
-| 3. Kernel private_mode | The EasyTier core rejects connections whose network name/secret mismatch | Anyone holding the URL but with wrong credentials |
 
-> Layer 3 relies on a patch (`deploy/runtime-hostname.patch`) that forwards `private_mode`
-> and `relay_network_whitelist` from the deployment config into the WASM kernel, so the
-> kernel refuses devices with mismatched network name/secret at handshake time instead of
-> treating them as "foreign networks" and relaying them.
+> This node runs in public relay mode: `private_mode` is off and `relay_network_whitelist`
+> keeps its default `*`, so connections with any network name/secret are treated as
+> "foreign networks" and relayed. `deploy/runtime-hostname.patch` still forwards `hostname`
+> and other config into the kernel and enables the management RPC (required by the CLI
+> passthrough).
 
 ### Deployment Pipeline
 
