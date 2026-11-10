@@ -79,11 +79,9 @@ jobs:
           EASYTIER_NETWORK_NAME: ${{ secrets.EASYTIER_NETWORK_NAME }}
           EASYTIER_NETWORK_SECRET: ${{ secrets.EASYTIER_NETWORK_SECRET }}
           EASYTIER_ACCESS_TOKEN: ${{ secrets.EASYTIER_ACCESS_TOKEN }}
-          WAF_IP_WHITELIST: ${{ secrets.WAF_IP_WHITELIST }}
         run: |
           npx wrangler deploy --name easytier-cfworker-preview \
-            --var EASYTIER_IP_WHITELIST:"$WAF_IP_WHITELIST" \
-                  EASYTIER_OBJECT_NAME:"pv-preview" \
+            --var EASYTIER_OBJECT_NAME:"pv-preview" \
                   EASYTIER_INSTANCE_NAME:"CF-WORKER-PREVIEW"
           echo "$EASYTIER_NETWORK_NAME" | npx wrangler secret put EASYTIER_NETWORK_NAME --name easytier-cfworker-preview
           echo "$EASYTIER_NETWORK_SECRET" | npx wrangler secret put EASYTIER_NETWORK_SECRET --name easytier-cfworker-preview

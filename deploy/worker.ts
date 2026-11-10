@@ -11,27 +11,8 @@ interface Env {
   EASYTIER_ENABLE_ENCRYPTION: string;
   // 私人模式访问令牌（Secret）：WebSocket 升级必须携带 ?token=<值>，否则 403
   EASYTIER_ACCESS_TOKEN: string;
-  // IP 白名单（逗号分隔，由 GitHub 仓库变量 WAF_IP_WHITELIST 注入）：非 CN 来源仅允许名单内 IP
-  EASYTIER_IP_WHITELIST: string;
   // 内核实例显示名（可选，默认 CF-WORKER；preview 环境用不同名字便于区分）
   EASYTIER_INSTANCE_NAME?: string;
-}
-
-// 允许接入的地区（ISO 3166-1 alpha-2）
-const ALLOWED_COUNTRY = "CN";
-
-function ipWhitelist(env: Env): string[] {
-  return (env.EASYTIER_IP_WHITELIST ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function isAllowedGeo(request: Request, env: Env): boolean {
-  const ip = request.headers.get("CF-Connecting-IP") ?? "";
-  if (ipWhitelist(env).includes(ip)) return true;
-  const country = (request as unknown as { cf?: { country?: string } }).cf?.country;
-  return country === ALLOWED_COUNTRY;
 }
 
 const easytier = createEasyTierCloudflare<Env>({
@@ -607,9 +588,6 @@ export default {
       if (expected && segments[0] !== expected) {
         return new Response("Forbidden", { status: 403 });
       }
-      if (!isAllowedGeo(request, env)) {
-        return new Response("Forbidden", { status: 403 });
-      }
       return handleCliRequest(request, env, segments[1] ?? "");
     }
 
@@ -626,11 +604,7 @@ export default {
           return new Response("Forbidden", { status: 403 });
         }
       }
-      // 私人模式第二层：仅允许 CN 来源或白名单 IP 建立隧道
-      if (!isAllowedGeo(request, env)) {
-        return new Response("Forbidden", { status: 403 });
-      }
-      // 第三层：EasyTier 内核握手校验 network_name + network_secret，不匹配即断开
+      // 第二层：EasyTier 内核握手校验 network_name + network_secret，不匹配即断开
     }
 
     return easytier.fetch(request, env, ctx);

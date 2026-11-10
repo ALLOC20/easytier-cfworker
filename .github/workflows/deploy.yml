@@ -73,17 +73,15 @@ jobs:
           EASYTIER_NETWORK_NAME: ${{ secrets.EASYTIER_NETWORK_NAME }}
           EASYTIER_NETWORK_SECRET: ${{ secrets.EASYTIER_NETWORK_SECRET }}
           EASYTIER_ACCESS_TOKEN: ${{ secrets.EASYTIER_ACCESS_TOKEN }}
-          WAF_IP_WHITELIST: ${{ secrets.WAF_IP_WHITELIST }}
           WAF_ZONE_NAME: ${{ secrets.WAF_ZONE_NAME }}
           WORKER_CUSTOM_DOMAINS: ${{ secrets.WORKER_CUSTOM_DOMAINS }}
           WORKER_HEALTH_URL: ${{ secrets.WORKER_HEALTH_URL }}
         run: |
-          # EASYTIER_* 明文 vars 不参与代码逻辑（除 IP 白名单外），仅作为配置的
-          # 可视化存档：Cloudflare dashboard → worker → Settings → Variables 可查，
-          # 对外不暴露。GitHub 侧这些值全部在 Secrets 中（public 仓库 Variables 任何人可读）。
+          # EASYTIER_* 明文 vars 不参与代码逻辑，仅作为配置的可视化存档：
+          # Cloudflare dashboard → worker → Settings → Variables 可查，对外不暴露。
+          # GitHub 侧这些值全部在 Secrets 中（public 仓库 Variables 任何人可读）。
           npx wrangler deploy \
-            --var EASYTIER_IP_WHITELIST:"$WAF_IP_WHITELIST" \
-                  EASYTIER_ZONE_NAME:"$WAF_ZONE_NAME" \
+            --var EASYTIER_ZONE_NAME:"$WAF_ZONE_NAME" \
                   EASYTIER_CUSTOM_DOMAINS:"$WORKER_CUSTOM_DOMAINS" \
                   EASYTIER_HEALTH_URL:"$WORKER_HEALTH_URL"
           echo "$EASYTIER_NETWORK_NAME" | npx wrangler secret put EASYTIER_NETWORK_NAME --name easytier-cfworker
@@ -159,13 +157,12 @@ jobs:
             done
           fi
 
-      - name: Apply WAF allowlist (CN + IP whitelist; only /health and WebSocket)
+      - name: Apply WAF allowlist (only /health and WebSocket; auth is token + kernel handshake)
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           WAF_ZONE_NAME: ${{ secrets.WAF_ZONE_NAME }}
           WAF_HOSTS: ${{ secrets.WAF_HOSTS }}
-          WAF_IP_WHITELIST: ${{ secrets.WAF_IP_WHITELIST }}
         run: |
           python3 - <<'PYEOF'
           import json, os, urllib.request, urllib.error
@@ -198,16 +195,11 @@ jobs:
           zone_id = zones[0]["id"]
           phase = "http_request_firewall_custom"
 
-          whitelist = [s.strip() for s in os.environ.get("WAF_IP_WHITELIST", "").split(",") if s.strip()]
-          geo = 'ip.geoip.country eq "CN"'
-          if whitelist:
-              geo = f'({geo} or ip.src in {{{" ".join(whitelist)}}})'
-
-          # CLI 命令透传：GET /<访问令牌>/<只读子命令>，同样受地域限制
+          # CLI 命令透传：GET /<访问令牌>/<只读子命令>（无地域限制，令牌即凭证）
           cli_paths = "peer|route|connector|node|dump-route|foreign-network|public-ipv6"
           cli_expr = (
               f'(http.request.method eq "GET" and '
-              f'http.request.uri.path matches "^/[0-9a-f]{{40,64}}/({cli_paths})$" and {geo})'
+              f'http.request.uri.path matches "^/[0-9a-f]{{40,64}}/({cli_paths})$")'
           )
 
           rule = {
@@ -215,7 +207,7 @@ jobs:
               "expression": (
                   f'({host_expr}) and not '
                   f'(http.request.uri.path eq "/health" or '
-                  f'(lower(http.request.headers["upgrade"][0]) contains "websocket" and {geo}) or '
+                  f'lower(http.request.headers["upgrade"][0]) contains "websocket" or '
                   f'{cli_expr})'
               ),
               "action": "block",
@@ -231,7 +223,6 @@ jobs:
               body = {"rules": rules}
           res = req(ep, "PUT", body)
           print("WAF rule result:", "OK" if res.get("success") else res.get("errors"))
-          print("IP whitelist applied:", whitelist or "(empty)")
           if not res.get("success"):
               print("WARN: 请给 API Token 添加权限：区域(Zone) -> Zone WAF -> Edit")
           PYEOF

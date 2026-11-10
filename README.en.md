@@ -56,17 +56,16 @@ P2P when hole punching succeeds and is relayed through the Worker otherwise.
 
 ### Four Protection Layers
 
-Only connections that "reach the edge + carry a token + come from an allowed region + use
-correct credentials" ever join the network:
+Only connections that "reach the edge + carry a token + use correct credentials" ever join
+the network (no geo or IP restrictions):
 
 | Layer | Mechanism | Blocks |
 |---|---|---|
-| 1. Cloudflare WAF | Only `/health` and WebSocket upgrades pass; WS requires CN origin or whitelisted IP | Scanners, crawlers, unknown foreign sources |
+| 1. Cloudflare WAF | Only `/health`, WebSocket upgrades and read-only CLI query paths pass | Scanners, crawlers, other paths |
 | 2. Worker access token | URL must carry your secret Access Token | Everything tokenless — rejected **before** the EasyTier handshake |
-| 3. Worker geo check | Same policy as WAF, enforced in code | Backup if WAF is bypassed |
-| 4. Kernel private_mode | The EasyTier core rejects connections whose network name/secret mismatch | Anyone holding the URL but with wrong credentials |
+| 3. Kernel private_mode | The EasyTier core rejects connections whose network name/secret mismatch | Anyone holding the URL but with wrong credentials |
 
-> Layer 4 relies on a patch (`deploy/runtime-hostname.patch`) that forwards `private_mode`
+> Layer 3 relies on a patch (`deploy/runtime-hostname.patch`) that forwards `private_mode`
 > and `relay_network_whitelist` from the deployment config into the WASM kernel, so the
 > kernel refuses devices with mismatched network name/secret at handshake time instead of
 > treating them as "foreign networks" and relaying them.
@@ -132,7 +131,6 @@ Repo → **Settings → Secrets and variables → Actions**.
 | `WORKER_CUSTOM_DOMAINS` | space-separated hostnames | Custom domains bound to the Worker (**keep in Secrets** — Variables on a public repo are readable by anyone) |
 | `WAF_HOSTS` | space-separated hostnames | Hostnames covered by the WAF rule; keep in sync with the previous entry |
 | `WORKER_HEALTH_URL` | any bound access hostname | Used by the post-deploy health check |
-| `WAF_IP_WHITELIST` | empty or comma-separated IPs (optional) | Extra allowed public IPs; empty = CN only |
 
 > Store **all** of the above as **Secrets** (not Variables): on public repos, Variable values
 > are readable by everyone; Secrets are usable in Actions but cannot be read. Missing values
@@ -204,7 +202,6 @@ uri = "wss://et.example.com/<access-token>"
 | `deploy/wrangler.jsonc` | `name` | Worker name |
 | `deploy/wrangler.jsonc` | `vars.EASYTIER_OBJECT_NAME` | Durable Object instance name (renaming forces a fresh instance) |
 | `deploy/wrangler.jsonc` | `vars.EASYTIER_ENABLE_ENCRYPTION` | Kernel encryption on/off |
-| `deploy/worker.ts` | `ALLOWED_COUNTRY` | Allowed ISO country code (default `CN`) |
 | `deploy/worker.ts` | `config()` | Network identity source, instance name, privateMode, etc. |
 
 Any file change pushed to `main` redeploys automatically; **after changing GitHub

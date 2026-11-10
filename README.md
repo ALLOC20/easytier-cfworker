@@ -41,18 +41,17 @@
 
 每个接入的 WebSocket 连接被交给 Durable Object 内的 EasyTier 内核处理。内核以你的 `网络名/密码` 加入 EasyTier 网络，对客户端来说它就是一个普通对端节点（显示名 `CF-WORKER`）。设备间的流量如果 P2P 打洞成功就直连，失败则经 Worker 中继。
 
-### 四层安全防护
+### 三层安全防护
 
-只有"连得上 + 有令牌 + 来自允许地区 + 凭据正确"的连接才能入网：
+只有"连得上 + 有令牌 + 凭据正确"的连接才能入网（不限地域、不限 IP）：
 
 | 层 | 机制 | 拦截对象 |
 |---|---|---|
-| 1. Cloudflare WAF | 仅放行 `/health` 与 WebSocket 升级；WebSocket 要求来源为 CN 或白名单 IP | 扫描器、爬虫、海外陌生来源 |
+| 1. Cloudflare WAF | 仅放行 `/health`、WebSocket 升级与只读 CLI 查询路径 | 扫描器、爬虫、其他路径 |
 | 2. Worker 访问令牌 | URL 必须携带只有你知道的 Access Token | 一切无令牌连接（在进入 EasyTier 握手**之前**拒绝） |
-| 3. Worker 地域校验 | 与 WAF 同策略的第二道校验 | WAF 被绕过时兜底 |
-| 4. 内核 private_mode | EasyTier 内核拒绝网络名/密码不匹配的连接 | 拿到 URL 但凭据错误的连接 |
+| 3. 内核 private_mode | EasyTier 内核拒绝网络名/密码不匹配的连接 | 拿到 URL 但凭据错误的连接 |
 
-> 第 4 层依赖对 EasyTier 的一个补丁（`deploy/runtime-hostname.patch`）：把 `private_mode` 与
+> 第 3 层依赖对 EasyTier 的一个补丁（`deploy/runtime-hostname.patch`）：把 `private_mode` 与
 > `relay_network_whitelist` 从部署配置透传进 WASM 内核，使内核在握手层直接拒绝
 > "网络名或密码不匹配"的设备，而非把它们当作"外部网络"放行中继。
 
@@ -116,7 +115,6 @@
 | `WORKER_CUSTOM_DOMAINS` | 空格分隔的主机名列表 | 绑定给 Worker 的自定义域名（**请写在 Secrets 里**——public 仓库的 Variables 任何人可读） |
 | `WAF_HOSTS` | 空格分隔的主机名列表 | WAF 规则覆盖的主机名，与上一项保持一致 |
 | `WORKER_HEALTH_URL` | 任一接入域名 | 部署后健康检查用 |
-| `WAF_IP_WHITELIST` | 留空或逗号分隔的 IP（可选） | 额外允许接入的公网 IP；留空 = 仅允许 CN 来源 |
 
 > 以上全部用 **Secrets** 存放（不要用 Variables）：public 仓库中 Variables 的值对所有人可见，
 > Secrets 仅在 Actions 中可用、不可读取。缺省时对应步骤自动跳过，不影响部署。
@@ -183,7 +181,6 @@ uri = "wss://et.example.com/<访问令牌>"
 | `deploy/wrangler.jsonc` | `name` | Worker 名称 |
 | `deploy/wrangler.jsonc` | `vars.EASYTIER_OBJECT_NAME` | Durable Object 实例名（改名字会强制重建实例） |
 | `deploy/wrangler.jsonc` | `vars.EASYTIER_ENABLE_ENCRYPTION` | 是否开启内核加密 |
-| `deploy/worker.ts` | `ALLOWED_COUNTRY` | 允许接入的 ISO 国家码（默认 `CN`） |
 | `deploy/worker.ts` | `config()` | 网络名/密码来源、实例名、privateMode 等 |
 
 改完任何文件 push 即自动重新部署；**改 GitHub Secrets/Variables 后必须手动重跑 workflow**
