@@ -501,8 +501,15 @@ function parseRustDebug(text: string): unknown {
       for (;;) {
         list.push(parseValue());
         ws();
-        if (text[pos.index] === ",") pos.index += 1;
-        else if (text[pos.index] === "]") {
+        if (text[pos.index] === ",") {
+          // 容忍尾随逗号（pretty 格式如 Some(\n"x",\n)）
+          pos.index += 1;
+          ws();
+          if (text[pos.index] === "]") {
+            pos.index += 1;
+            return list;
+          }
+        } else if (text[pos.index] === "]") {
           pos.index += 1;
           return list;
         } else fail("expected , or ] in list");
@@ -552,8 +559,15 @@ function parseRustDebug(text: string): unknown {
     for (;;) {
       items.push(parseValue());
       ws();
-      if (text[pos.index] === ",") pos.index += 1;
-      else if (text[pos.index] === closing) {
+      if (text[pos.index] === ",") {
+        // 容忍尾随逗号（pretty 格式）
+        pos.index += 1;
+        ws();
+        if (text[pos.index] === closing) {
+          pos.index += 1;
+          return items.length === 1 ? items[0] : items;
+        }
+      } else if (text[pos.index] === closing) {
         pos.index += 1;
         return items.length === 1 ? items[0] : items;
       } else fail(`expected , or ${closing}`);
@@ -573,18 +587,30 @@ function parseRustDebug(text: string): unknown {
       // （如 ForeignNetworkRouteInfoKey { ... }: ...），统一按值解析
       const keyRaw = parseValue();
       ws();
-      if (text[pos.index] !== ":") fail("expected : after key");
-      pos.index += 1;
       const key =
         typeof keyRaw === "string"
           ? keyRaw
           : keyRaw === null || keyRaw === undefined
             ? "null"
             : JSON.stringify(keyRaw);
-      obj[key] = parseValue();
+      if (text[pos.index] === ":") {
+        // 键值对（映射或结构体字段）
+        pos.index += 1;
+        obj[key] = parseValue();
+      } else {
+        // 无冒号：HashSet/集合成员（如 connected_peers: { 1, 2, 3 }）
+        obj[key] = true;
+      }
       ws();
-      if (text[pos.index] === ",") pos.index += 1;
-      else if (text[pos.index] === "}") {
+      if (text[pos.index] === ",") {
+        // 容忍尾随逗号（pretty 格式）
+        pos.index += 1;
+        ws();
+        if (text[pos.index] === "}") {
+          pos.index += 1;
+          return obj;
+        }
+      } else if (text[pos.index] === "}") {
         pos.index += 1;
         return obj;
       } else fail("expected , or } in fields");
