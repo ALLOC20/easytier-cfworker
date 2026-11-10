@@ -484,7 +484,11 @@ function kvTable(obj: Record<string, unknown>): string {
   return `<table class="kv"><tbody>${rows}</tbody></table>`;
 }
 
-function renderCliHtml(command: string, payload: Record<string, unknown>): string {
+function renderCliHtml(
+  command: string,
+  payload: Record<string, unknown>,
+  basePath: string,
+): string {
   const sections: string[] = [];
   for (const [key, value] of Object.entries(payload)) {
     if (key === "ok" || key === "command") continue;
@@ -501,21 +505,53 @@ function renderCliHtml(command: string, payload: Record<string, unknown>): strin
       sections.push(`${title}<p>${htmlEscape(String(value ?? ""))}</p>`);
     }
   }
+  const nav = Object.keys(CLI_COMMANDS)
+    .map((name) =>
+      name === command
+        ? `<span class="cur">${htmlEscape(name)}</span>`
+        : `<a href="${htmlEscape(basePath)}/${htmlEscape(name)}">${htmlEscape(name)}</a>`,
+    )
+    .join('<span class="sep">·</span>');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>easytier-cli ${htmlEscape(command)}</title>
 <style>
-body{font-family:ui-monospace,Menlo,Consolas,monospace;margin:1rem;background:#14141c;color:#d8d8e0}
-h1{font-size:1.05rem}h2{font-size:.95rem;margin:1.2rem 0 .35rem;color:#7db4e8}
+:root{--bg:#14141c;--fg:#d8d8e0;--dim:#9a9ab0;--accent:#7db4e8;--bd:#3a3a4a;--thead:#23233a;--kvhead:#1d1d30}
+html[data-theme="light"]{--bg:#f5f6f8;--fg:#24242c;--dim:#5c5c70;--accent:#1c6bd0;--bd:#c8c8d4;--thead:#e4e7ee;--kvhead:#eceef4}
+@media (prefers-color-scheme: light){
+  html:not([data-theme="dark"]){--bg:#f5f6f8;--fg:#24242c;--dim:#5c5c70;--accent:#1c6bd0;--bd:#c8c8d4;--thead:#e4e7ee;--kvhead:#eceef4}
+}
+body{font-family:ui-monospace,Menlo,Consolas,monospace;margin:1rem;background:var(--bg);color:var(--fg)}
+nav{margin-bottom:.4rem;font-size:.85rem}
+nav a{color:var(--accent);text-decoration:none;padding:.1rem .15rem}
+nav a:hover{text-decoration:underline}
+nav .cur{color:var(--fg);font-weight:bold;border-bottom:1px solid var(--accent)}
+nav .sep{color:var(--dim);margin:0 .35rem}
+#theme{float:right;font:inherit;font-size:.8rem;padding:.1rem .55rem;background:none;color:var(--accent);border:1px solid var(--bd);border-radius:.4rem;cursor:pointer}
+h1{font-size:1.05rem}h2{font-size:.95rem;margin:1.2rem 0 .35rem;color:var(--accent)}
 table{border-collapse:collapse;margin:.3rem 0;font-size:.82rem}
-th,td{border:1px solid #3a3a4a;padding:.22rem .5rem;text-align:left;vertical-align:top}
-thead th{background:#23233a}
-table.kv th{background:#1d1d30;width:11rem}
+th,td{border:1px solid var(--bd);padding:.22rem .5rem;text-align:left;vertical-align:top}
+thead th{background:var(--thead)}
+table.kv th{background:var(--kvhead);width:11rem}
 td table{margin:0}
 </style></head><body>
+<button id="theme" onclick="toggleTheme()">☾ / ☀</button>
+<nav>${nav}</nav>
 <h1>easytier-cli ${htmlEscape(command)} — ok</h1>
 ${sections.join("\n")}
+<script>
+(function(){
+  var root=document.documentElement;
+  var saved=null;try{saved=localStorage.getItem("et-theme")}catch(e){}
+  if(saved)root.dataset.theme=saved;
+  window.toggleTheme=function(){
+    var t=root.dataset.theme==="light"?"dark":"light";
+    root.dataset.theme=t;
+    try{localStorage.setItem("et-theme",t)}catch(e){}
+  };
+})();
+</script>
 </body></html>`;
 }
 
@@ -655,14 +691,17 @@ async function handleCliRequest(
     );
   }
   // 浏览器请求渲染为 HTML 表格，curl/wget 等返回 JSON；?format= 可强制指定
-  const format = new URL(request.url).searchParams.get("format")?.toLowerCase();
+  const parsedUrl = new URL(request.url);
+  const format = parsedUrl.searchParams.get("format")?.toLowerCase();
   const wantsHtml =
     format === "html" ||
     (format !== "json" &&
       /mozilla\//i.test(request.headers.get("user-agent") ?? "") &&
       request.headers.get("accept")?.includes("text/html"));
   if (wantsHtml) {
-    return new Response(renderCliHtml(command, payload), {
+    // 顶部命令导航复用访问令牌路径（/<token>/<cmd>）
+    const basePath = `/${encodeURIComponent(parsedUrl.pathname.split("/").filter(Boolean)[0] ?? "")}`;
+    return new Response(renderCliHtml(command, payload, basePath), {
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
