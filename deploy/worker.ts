@@ -569,21 +569,18 @@ function parseRustDebug(text: string): unknown {
     }
     for (;;) {
       ws();
-      let key: string;
-      if (text[pos.index] === '"') {
-        key = parseString();
-      } else {
-        let end = pos.index;
-        while (end < text.length && text[end] !== ":" && !/[\s()[\]{}]/.test(text[end]!)) {
-          end += 1;
-        }
-        if (end === pos.index) fail("expected field key");
-        key = text.slice(pos.index, end);
-        pos.index = end;
-      }
+      // 键可能是裸标识、数字、IP/CIDR、带引号字符串，甚至是结构体
+      // （如 ForeignNetworkRouteInfoKey { ... }: ...），统一按值解析
+      const keyRaw = parseValue();
       ws();
-      if (text[pos.index] !== ":") fail(`expected : after key "${key}"`);
+      if (text[pos.index] !== ":") fail("expected : after key");
       pos.index += 1;
+      const key =
+        typeof keyRaw === "string"
+          ? keyRaw
+          : keyRaw === null || keyRaw === undefined
+            ? "null"
+            : JSON.stringify(keyRaw);
       obj[key] = parseValue();
       ws();
       if (text[pos.index] === ",") pos.index += 1;
