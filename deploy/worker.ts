@@ -432,6 +432,93 @@ const CONNECTOR_SPEC: FieldSpec[] = [
   { field: 2, kind: "varint", name: "status" },
 ];
 
+// ---- 浏览器友好渲染（HTML 表格） ----
+// curl/wget 等客户端默认 JSON；UA 含 Mozilla 且 Accept 含 text/html 的请求
+// 渲染为 HTML 表格。?format=json / ?format=html 可强制指定。
+
+function htmlEscape(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function recordTable(items: Record<string, unknown>[]): string {
+  const columns: string[] = [];
+  for (const item of items) {
+    for (const key of Object.keys(item)) {
+      if (!columns.includes(key)) columns.push(key);
+    }
+  }
+  const head = columns.map((c) => `<th>${htmlEscape(c)}</th>`).join("");
+  const rows = items
+    .map((item) => `<tr>${columns.map((c) => cellHtml(item[c])).join("")}</tr>`)
+    .join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function cellHtml(value: unknown): string {
+  if (value === null || value === undefined) return "<td></td>";
+  if (Array.isArray(value)) {
+    if (value.length > 0 && value.every(isRecord)) {
+      return `<td>${recordTable(value)}</td>`;
+    }
+    const text = value
+      .map((v) => (isRecord(v) || Array.isArray(v) ? JSON.stringify(v) : String(v)))
+      .join(", ");
+    return `<td>${htmlEscape(text)}</td>`;
+  }
+  if (isRecord(value)) return `<td>${kvTable(value)}</td>`;
+  return `<td>${htmlEscape(String(value))}</td>`;
+}
+
+function kvTable(obj: Record<string, unknown>): string {
+  const rows = Object.entries(obj)
+    .map(([key, value]) => `<tr><th>${htmlEscape(key)}</th>${cellHtml(value)}</tr>`)
+    .join("");
+  return `<table class="kv"><tbody>${rows}</tbody></table>`;
+}
+
+function renderCliHtml(command: string, payload: Record<string, unknown>): string {
+  const sections: string[] = [];
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === "ok" || key === "command") continue;
+    const title = `<h2>${htmlEscape(key)}${Array.isArray(value) ? ` (${value.length})` : ""}</h2>`;
+    if (Array.isArray(value)) {
+      sections.push(
+        value.length > 0 && value.every(isRecord)
+          ? `${title}${recordTable(value)}`
+          : `${title}<p>${htmlEscape(value.length ? JSON.stringify(value) : "(empty)")}</p>`,
+      );
+    } else if (isRecord(value)) {
+      sections.push(`${title}${kvTable(value)}`);
+    } else {
+      sections.push(`${title}<p>${htmlEscape(String(value ?? ""))}</p>`);
+    }
+  }
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>easytier-cli ${htmlEscape(command)}</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;margin:1rem;background:#14141c;color:#d8d8e0}
+h1{font-size:1.05rem}h2{font-size:.95rem;margin:1.2rem 0 .35rem;color:#7db4e8}
+table{border-collapse:collapse;margin:.3rem 0;font-size:.82rem}
+th,td{border:1px solid #3a3a4a;padding:.22rem .5rem;text-align:left;vertical-align:top}
+thead th{background:#23233a}
+table.kv th{background:#1d1d30;width:11rem}
+td table{margin:0}
+</style></head><body>
+<h1>easytier-cli ${htmlEscape(command)} — ok</h1>
+${sections.join("\n")}
+</body></html>`;
+}
+
 // ---- CLI 命令表（只读；写操作类命令默认不提供） ----
 
 const EMPTY_REQUEST = new Uint8Array(0);
@@ -566,6 +653,21 @@ async function handleCliRequest(
       { ok: false, error: String(error) },
       { status: 502 },
     );
+  }
+  // 浏览器请求渲染为 HTML 表格，curl/wget 等返回 JSON；?format= 可强制指定
+  const format = new URL(request.url).searchParams.get("format")?.toLowerCase();
+  const wantsHtml =
+    format === "html" ||
+    (format !== "json" &&
+      /mozilla\//i.test(request.headers.get("user-agent") ?? "") &&
+      request.headers.get("accept")?.includes("text/html"));
+  if (wantsHtml) {
+    return new Response(renderCliHtml(command, payload), {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
   }
   return Response.json(
     { ok: true, command, ...payload },
