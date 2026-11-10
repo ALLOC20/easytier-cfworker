@@ -41,19 +41,19 @@
 
 每个接入的 WebSocket 连接被交给 Durable Object 内的 EasyTier 内核处理。内核以你的 `网络名/密码` 加入 EasyTier 网络，对客户端来说它就是一个普通对端节点（显示名 `CF-WORKER`）。设备间的流量如果 P2P 打洞成功就直连，失败则经 Worker 中继。
 
-### 两层安全防护
+### 三层安全防护
 
-只有"连得上 + 有令牌"的连接才能使用本节点（内核层不校验网络名/密码，任何 EasyTier
-客户端都可经本节点握手与中继）：
+只有"连得上 + 有令牌 + 凭据正确"的连接才能入网（不限地域、不限 IP）：
 
 | 层 | 机制 | 拦截对象 |
 |---|---|---|
 | 1. Cloudflare WAF | 仅放行 `/health`、WebSocket 升级与只读 CLI 查询路径 | 扫描器、爬虫、其他路径 |
 | 2. Worker 访问令牌 | URL 必须携带只有你知道的 Access Token | 一切无令牌连接（在进入 EasyTier 握手**之前**拒绝） |
+| 3. 内核 private_mode | EasyTier 内核拒绝网络名/密码不匹配的连接 | 拿到 URL 但凭据错误的连接 |
 
-> 本节点为公共中继模式：不启用 `private_mode`，`relay_network_whitelist` 为默认值 `*`，
-> 即任意网络名/密码的连接都会被当作"外部网络"放行中继。`deploy/runtime-hostname.patch`
-> 仍会向内核透传 `hostname` 等配置并启用 management RPC（CLI 透传功能依赖）。
+> 第 3 层依赖对 EasyTier 的一个补丁（`deploy/runtime-hostname.patch`）：把 `private_mode` 与
+> `relay_network_whitelist` 从部署配置透传进 WASM 内核，使内核在握手层直接拒绝
+> "网络名或密码不匹配"的设备，而非把它们当作"外部网络"放行中继。
 
 ### 部署流水线
 

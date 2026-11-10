@@ -28,9 +28,10 @@ const easytier = createEasyTierCloudflare<Env>({
     instanceName: env.EASYTIER_INSTANCE_NAME || "CF-WORKER",
     hostname: env.EASYTIER_INSTANCE_NAME || "CF-WORKER",
     encryption: env.EASYTIER_ENABLE_ENCRYPTION !== "false",
-    // 公共中继模式：不校验 network_name/network_secret（private_mode 默认
-    // false、relay_network_whitelist 默认 "*"），任何客户端都可经本节点
-    // 握手/中继；接入仍受 URL 访问令牌保护
+    // 严格私有模式：网络名/密码不匹配的外部连接在内核握手层直接拒绝
+    privateMode: true,
+    // 拒绝所有"外部网络"中继（即使密码相同但网络名不同也不放行）
+    relayNetworkWhitelist: "",
   }),
 });
 
@@ -591,7 +592,7 @@ export default {
     }
 
     if (isWs) {
-      // 访问令牌校验（不匹配直接拒绝，不进入 EasyTier 握手）：
+      // 私人模式第一层：访问令牌校验（不匹配直接拒绝，不进入 EasyTier 握手）
       // 支持两种携带方式（兼容各类客户端）：
       //   1. 路径式：wss://host/<token>
       //   2. 查询式：wss://host/?token=<token>
@@ -603,6 +604,7 @@ export default {
           return new Response("Forbidden", { status: 403 });
         }
       }
+      // 第二层：EasyTier 内核握手校验 network_name + network_secret，不匹配即断开
     }
 
     return easytier.fetch(request, env, ctx);
