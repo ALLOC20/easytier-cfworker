@@ -436,6 +436,170 @@ const CONNECTOR_SPEC: FieldSpec[] = [
 // curl/wget 等客户端默认 JSON；UA 含 Mozilla 且 Accept 含 text/html 的请求
 // 渲染为 HTML 表格。?format=json / ?format=html 可强制指定。
 
+// ---- Rust Debug 输出解析（dump-route 的 result 是 PeerRouteServiceImpl 的单行 Debug 串） ----
+// 语法子集：结构体 Name { k: v, ... }、元组结构体 Name(v)、Some(v)/None、
+// 列表 [...]、元组 (...)、映射 { k: v }（键可为裸标识/IP/CIDR/字符串）、
+// 枚举变体（裸词）、带引号字符串（含转义）。解析失败由调用方回退为原始文本。
+
+function parseRustDebug(text: string): unknown {
+  const pos = { index: 0 };
+
+  const ws = () => {
+    while (pos.index < text.length && /\s/.test(text[pos.index]!)) pos.index += 1;
+  };
+  const fail = (why: string): never => {
+    throw new Error(`rust-debug parse: ${why} at offset ${pos.index}`);
+  };
+
+  function parseString(): string {
+    pos.index += 1; // opening quote
+    let out = "";
+    for (;;) {
+      const ch = text[pos.index];
+      if (ch === undefined) fail("unterminated string");
+      if (ch === '"') {
+        pos.index += 1;
+        return out;
+      }
+      if (ch === "\\") {
+        pos.index += 1;
+        const esc = text[pos.index];
+        pos.index += 1;
+        if (esc === "n") out += "\n";
+        else if (esc === "r") out += "\r";
+        else if (esc === "t") out += "\t";
+        else if (esc === "0") out += "\0";
+        else if (esc === '"' || esc === "\\" || esc === "'") out += esc;
+        else if (esc === "u") {
+          if (text[pos.index] !== "{") fail("invalid \\u escape");
+          pos.index += 1;
+          const start = pos.index;
+          while (text[pos.index] !== "}") pos.index += 1;
+          out += String.fromCodePoint(parseInt(text.slice(start, pos.index), 16));
+          pos.index += 1;
+        } else fail(`unknown escape \\${esc ?? ""}`);
+        continue;
+      }
+      out += ch;
+      pos.index += 1;
+    }
+  }
+
+  function parseValue(): unknown {
+    ws();
+    const ch = text[pos.index];
+    if (ch === undefined) fail("unexpected end of input");
+    if (ch === '"') return parseString();
+    if (ch === "[") {
+      pos.index += 1;
+      const list: unknown[] = [];
+      ws();
+      if (text[pos.index] === "]") {
+        pos.index += 1;
+        return list;
+      }
+      for (;;) {
+        list.push(parseValue());
+        ws();
+        if (text[pos.index] === ",") pos.index += 1;
+        else if (text[pos.index] === "]") {
+          pos.index += 1;
+          return list;
+        } else fail("expected , or ] in list");
+      }
+    }
+    if (ch === "(") {
+      pos.index += 1;
+      return parseValueList(")");
+    }
+    if (ch === "{") {
+      pos.index += 1;
+      return parseFields();
+    }
+    let end = pos.index;
+    while (end < text.length && !/[\s,()[\]{}:]/.test(text[end]!)) end += 1;
+    if (end === pos.index) fail("expected a value");
+    const token = text.slice(pos.index, end);
+    pos.index = end;
+    if (token === "None") return null;
+    if (token === "true") return true;
+    if (token === "false") return false;
+    // 整数超过 Number 安全范围时保留字符串（如纳秒时间戳）
+    if (/^-?\d+$/.test(token)) return token.length <= 15 ? Number(token) : token;
+    if (/^-?\d+\.\d+$/.test(token)) return Number(token);
+    ws();
+    if (text[pos.index] === "(") {
+      pos.index += 1;
+      const inner = parseValueList(")");
+      if (token === "Some") return inner;
+      return { "#type": token, "#value": inner };
+    }
+    if (text[pos.index] === "{") {
+      pos.index += 1;
+      return { "#type": token, ...parseFields() };
+    }
+    return token; // 枚举变体等裸词
+  }
+
+  /** 解析括号内逗号分隔的值序列（含结尾闭括号）；单值时解包。 */
+  function parseValueList(closing: string): unknown {
+    const items: unknown[] = [];
+    ws();
+    if (text[pos.index] === closing) {
+      pos.index += 1;
+      return [];
+    }
+    for (;;) {
+      items.push(parseValue());
+      ws();
+      if (text[pos.index] === ",") pos.index += 1;
+      else if (text[pos.index] === closing) {
+        pos.index += 1;
+        return items.length === 1 ? items[0] : items;
+      } else fail(`expected , or ${closing}`);
+    }
+  }
+
+  function parseFields(): Record<string, unknown> {
+    const obj: Record<string, unknown> = {};
+    ws();
+    if (text[pos.index] === "}") {
+      pos.index += 1;
+      return obj;
+    }
+    for (;;) {
+      ws();
+      let key: string;
+      if (text[pos.index] === '"') {
+        key = parseString();
+      } else {
+        let end = pos.index;
+        while (end < text.length && text[end] !== ":" && !/[\s()[\]{}]/.test(text[end]!)) {
+          end += 1;
+        }
+        if (end === pos.index) fail("expected field key");
+        key = text.slice(pos.index, end);
+        pos.index = end;
+      }
+      ws();
+      if (text[pos.index] !== ":") fail(`expected : after key "${key}"`);
+      pos.index += 1;
+      obj[key] = parseValue();
+      ws();
+      if (text[pos.index] === ",") pos.index += 1;
+      else if (text[pos.index] === "}") {
+        pos.index += 1;
+        return obj;
+      } else fail("expected , or } in fields");
+    }
+  }
+
+  const value = parseValue();
+  ws();
+  if (pos.index !== text.length) fail("trailing input after value");
+  return value;
+}
+
 function htmlEscape(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -462,18 +626,27 @@ function recordTable(items: Record<string, unknown>[]): string {
   return `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+function detailsWrap(summary: string, inner: string): string {
+  return `<details><summary>${htmlEscape(summary)}</summary>${inner}</details>`;
+}
+
 function cellHtml(value: unknown): string {
   if (value === null || value === undefined) return "<td></td>";
   if (Array.isArray(value)) {
     if (value.length > 0 && value.every(isRecord)) {
-      return `<td>${recordTable(value)}</td>`;
+      const table = recordTable(value);
+      return `<td>${value.length > 4 ? detailsWrap(`${value.length} items`, table) : table}</td>`;
     }
     const text = value
       .map((v) => (isRecord(v) || Array.isArray(v) ? JSON.stringify(v) : String(v)))
       .join(", ");
     return `<td>${htmlEscape(text)}</td>`;
   }
-  if (isRecord(value)) return `<td>${kvTable(value)}</td>`;
+  if (isRecord(value)) {
+    const count = Object.keys(value).length;
+    const table = kvTable(value);
+    return `<td>${count > 4 ? detailsWrap(`${count} fields`, table) : table}</td>`;
+  }
   return `<td>${htmlEscape(String(value))}</td>`;
 }
 
@@ -500,7 +673,23 @@ function renderCliHtml(
           : `${title}<p>${htmlEscape(value.length ? JSON.stringify(value) : "(empty)")}</p>`,
       );
     } else if (isRecord(value)) {
-      sections.push(`${title}${kvTable(value)}`);
+      // 顶层大对象按字段拆成多个小节（如 dump-route 的 route 结构）
+      if (Object.keys(value).length > 6) {
+        for (const [key2, value2] of Object.entries(value)) {
+          const sub = `<h2>${htmlEscape(key2)}</h2>`;
+          if (Array.isArray(value2) && value2.length > 0 && value2.every(isRecord)) {
+            sections.push(`${sub}${recordTable(value2)}`);
+          } else if (isRecord(value2)) {
+            sections.push(`${sub}${kvTable(value2)}`);
+          } else {
+            sections.push(
+              `${sub}<p>${htmlEscape(Array.isArray(value2) ? JSON.stringify(value2) : String(value2 ?? ""))}</p>`,
+            );
+          }
+        }
+      } else {
+        sections.push(`${title}${kvTable(value)}`);
+      }
     } else {
       sections.push(`${title}<p>${htmlEscape(String(value ?? ""))}</p>`);
     }
@@ -535,6 +724,7 @@ th,td{border:1px solid var(--bd);padding:.22rem .5rem;text-align:left;vertical-a
 thead th{background:var(--thead)}
 table.kv th{background:var(--kvhead);width:11rem}
 td table{margin:0}
+details summary{cursor:pointer;color:var(--dim);user-select:none}
 </style></head><body>
 <button id="theme" onclick="toggleTheme()">☾ / ☀</button>
 <nav>${nav}</nav>
@@ -614,7 +804,14 @@ const CLI_COMMANDS: Record<
       const decoded = decodeMessageAt(bytes, [
         { field: 1, kind: "string", name: "result" },
       ], 0, bytes.length);
-      return { result: decoded.result ?? "" };
+      const raw = decoded.result ?? "";
+      // result 是 PeerRouteServiceImpl 的 Rust Debug 单行串，解析为结构化
+      // 对象展示；解析失败时回退为原始文本
+      try {
+        return { route: parseRustDebug(raw) };
+      } catch {
+        return { result: raw };
+      }
     },
   },
   "foreign-network": {
