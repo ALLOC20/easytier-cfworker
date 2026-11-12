@@ -23,7 +23,7 @@
         "description": "EasyTier **网络密码**：请使用强随机密码（网络名 + 密码不匹配的设备会在内核握手层被拒绝）。"
       },
       "EASYTIER_ACCESS_TOKEN": {
-        "description": "**访问令牌**：接入 URL 的一部分（即 wss://你的域名/后面跟的这一段），请当作口令保管。可用 `openssl rand -hex 24` 生成。"
+        "description": "**访问令牌**：接入 URL 的一部分（即 wss://你的域名/访问令牌），请当作口令保管。可用 `openssl rand -hex 24` 生成。"
       },
       "EASYTIER_OBJECT_NAME": {
         "description": "Durable Object 实例名，默认 `primary` 即可，多网络部署时才需要区分。"
