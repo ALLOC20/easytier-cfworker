@@ -7,6 +7,36 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ALLOC20/easytier-cfworker)
 
+## 一键部署（推荐）
+
+点击上方按钮即可在几分钟内把中继节点部署到你自己的 Cloudflare 账号，全程无需命令行：
+
+1. **授权并克隆**：按钮会引导你授权 Cloudflare 访问 GitHub，并把本仓库克隆一份到你的
+   账号（此后对生产分支的每次推送都会自动重新部署）
+2. **填写三个配置**：`EASYTIER_NETWORK_NAME`（网络名）、`EASYTIER_NETWORK_SECRET`
+   （网络密码）、`EASYTIER_ACCESS_TOKEN`（访问令牌）。三项均以**明文变量**写入
+   Worker（说明见下方注释）
+3. **自动部署**：Cloudflare 自动创建 Durable Object 并部署 Worker（无需 Rust 工具链——
+   仓库内已提交预构建的内核快照）
+4. **验证**：浏览器访问 `https://<workers.dev 地址>/health`，返回 `{"ok":true,...}` 即成功
+
+部署后还有两件事建议完成：
+
+- **绑定自定义域名**：workers.dev 域名在大陆被 DNS 污染，国内设备请按
+  [第 5 步](#第-5-步绑定自定义域名)绑定自定义域名后使用
+- **客户端接入**：接入 URL 与客户端配置见 [第 6 步](#第-6-步客户端接入)，其中
+  访问令牌就是部署时填写的 `EASYTIER_ACCESS_TOKEN`
+
+> 说明：
+> - 三个配置项以**明文变量**部署：在控制台 → Worker → Settings → Variables 中随时可查、
+>   可改（修改变量会生成新版本，立即生效）。个人自用无需当作机密；如有需要，可在部署后
+>   于控制台删除明文绑定、改建同名 Secret
+> - 访问令牌出现在接入 URL 中，等同口令——不要泄露到聊天截图或公开场合
+> - 一键部署使用仓库内提交的**内核快照**版本；进阶部署教程（下文）每次部署都从
+>   EasyTier 上游源码重新构建，内核始终最新。两者可并存，互不影响
+> - ⚠️ 任何方式部署后，都请阅读[限额与注意事项](#限额与注意事项)中的
+>   **Durable Object 用量与风险声明**——长时间超限使用存在账号被暂停的风险
+
 ---
 
 ## 动机：为什么需要这个项目
@@ -68,32 +98,7 @@
 4. 应用你仓库里的 `deploy/worker.ts` 与 `deploy/wrangler.jsonc`，`wrangler deploy` 到 Cloudflare
 5. 写入 EasyTier Secrets，健康检查，并自动维护 WAF 规则
 
-## 一键部署（Deploy to Cloudflare）
-
-点击上方按钮即可在几分钟内把中继节点部署到你自己的 Cloudflare 账号，全程无需命令行：
-
-1. **授权并克隆**：按钮会引导你授权 Cloudflare 访问 GitHub，并把本仓库克隆一份到你的账号
-2. **填写三个 Secret**：部署页面会提示填写 `EASYTIER_NETWORK_NAME`（网络名）、
-   `EASYTIER_NETWORK_SECRET`（网络密码）、`EASYTIER_ACCESS_TOKEN`（访问令牌），
-   以 Secret 形式写入 Worker，之后可随时在控制台修改，无需重新部署
-3. **自动部署**：Cloudflare 自动创建 Durable Object 并部署 Worker（无需 Rust 工具链——
-   仓库内已提交预构建的内核快照）
-4. **验证**：浏览器访问 `https://<workers.dev 地址>/health`，返回 `{"ok":true,...}` 即成功
-
-部署后还有两件事建议完成：
-
-- **绑定自定义域名**：workers.dev 域名在大陆被 DNS 污染，国内设备请按
-  [第 5 步](#第-5-步绑定自定义域名)绑定自定义域名后使用
-- **客户端接入**：接入 URL 与客户端配置见 [第 6 步](#第-6-步客户端接入)，其中
-  `<访问令牌>` 就是部署时填写的 `EASYTIER_ACCESS_TOKEN`
-
-> 说明：
-> - 一键部署使用仓库内提交的**内核快照**版本；GitHub Actions 方式（下文）每次部署都从
->   EasyTier 上游源码重新构建，内核始终最新。两者可并存，互不影响
-> - ⚠️ 任何方式部署后，都请阅读[限额与注意事项](#限额与注意事项)中的
->   **Durable Object 用量与风险声明**——长时间超限使用存在账号被暂停的风险
-
-## 部署教程（GitHub Actions 方式，零基础版）
+## 进阶部署教程（GitHub Actions 自动构建，适合想修改源码的用户）
 
 ### 第 0 步：准备三样东西
 

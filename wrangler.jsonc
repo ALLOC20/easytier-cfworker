@@ -15,9 +15,15 @@
       "fallthrough": true
     }
   ],
+  // 三个 EasyTier 配置项为明文 vars（个人自用，控制台可直接查看/修改；
+  // 一键部署页面会提示逐项填写）。如需保密，可在部署后于控制台删除明文绑定、
+  // 改建同名 Secret。
   "vars": {
     "EASYTIER_OBJECT_NAME": "primary",
-    "EASYTIER_ENABLE_ENCRYPTION": "true"
+    "EASYTIER_ENABLE_ENCRYPTION": "true",
+    "EASYTIER_NETWORK_NAME": "my_net",
+    "EASYTIER_NETWORK_SECRET": "please-change-to-a-long-random-secret",
+    "EASYTIER_ACCESS_TOKEN": "please-change-to-a-long-random-token"
   },
   "durable_objects": {
     "bindings": [
