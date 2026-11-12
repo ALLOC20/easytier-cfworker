@@ -30,7 +30,7 @@ WASM) directly on Cloudflare Workers:
   fits within the free tier
 - **Globally reachable**: wss (WebSocket over TLS) on port 443 is indistinguishable from
   regular HTTPS traffic and tunnels through most firewalls and NATs
-- **Private by design**: four protection layers (below) ensure strangers cannot ride on
+- **Private by design**: three protection layers (below) ensure strangers cannot ride on
   your node
 - **Fully automated deploys**: push to deploy — GitHub Actions compiles Rust to WASM in the
   cloud
@@ -54,7 +54,7 @@ Object. The core joins your EasyTier network using your `network name / secret`,
 clients it is just another peer (displayed as `CF-WORKER`). Device-to-device traffic goes
 P2P when hole punching succeeds and is relayed through the Worker otherwise.
 
-### Four Protection Layers
+### Three Protection Layers
 
 Only connections that "reach the edge + carry a token + come from an allowed region + use
 correct credentials" ever join the network:
@@ -242,6 +242,24 @@ Workers Logs). Kernel events are emitted as JSON, e.g. `tunnel_admission_failed`
 - Only `/health` is exposed publicly (status and connection count, no sensitive data)
 - Private repos get 2,000 free Actions minutes per month; each build takes 5–15 minutes
 - Use a strong network secret; treat the Access Token like a password (it appears in URLs)
+
+### ⚠️ Durable Object Usage and Risk Disclosure
+
+The Workers free plan allows **13,000 GB-s of Durable Object duration per day**, and this
+project's DO is billed at a fixed 128 MB: **as long as one device stays connected, the DO
+runs all day**, consuming roughly 11,000 GB-s/day (~85% of the free quota) — any extra
+usage at all (e.g. a test deployment whose DO gets occupied by a client) tips you over the
+limit.
+
+- **When exceeded**: Cloudflare throttles the Durable Object for the rest of the day; every
+  request fails with 5xx errors until the quota resets at 00:00 UTC — the relay is
+  effectively unavailable for the rest of that day
+- **Account risk**: sustained overage of the free tier may violate Cloudflare's Terms of
+  Service and **can lead to account suspension or banning**. Check the usage metrics under
+  Workers & Pages in the Cloudflare dashboard regularly
+- **Recommendation**: keep the number of always-on devices minimal, never let extra
+  deployment instances stay occupied by clients; if usage sits near the limit, upgrade to
+  Workers Paid ($5/mo, includes 400,000 GB-s/month)
 
 ## Acknowledgements
 
