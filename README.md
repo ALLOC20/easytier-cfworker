@@ -5,6 +5,8 @@
 > 在 Cloudflare Workers 上运行 EasyTier WASM 内核，搭建一个**完全属于你的私人 wss 握手/中继节点**。
 > 由 GitHub Actions 全自动构建部署，本地无需安装任何工具链。
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ALLOC20/easytier-cfworker)
+
 ---
 
 ## 动机：为什么需要这个项目
@@ -66,7 +68,32 @@
 4. 应用你仓库里的 `deploy/worker.ts` 与 `deploy/wrangler.jsonc`，`wrangler deploy` 到 Cloudflare
 5. 写入 EasyTier Secrets，健康检查，并自动维护 WAF 规则
 
-## 部署教程（零基础版）
+## 一键部署（Deploy to Cloudflare）
+
+点击上方按钮即可在几分钟内把中继节点部署到你自己的 Cloudflare 账号，全程无需命令行：
+
+1. **授权并克隆**：按钮会引导你授权 Cloudflare 访问 GitHub，并把本仓库克隆一份到你的账号
+2. **填写三个 Secret**：部署页面会提示填写 `EASYTIER_NETWORK_NAME`（网络名）、
+   `EASYTIER_NETWORK_SECRET`（网络密码）、`EASYTIER_ACCESS_TOKEN`（访问令牌），
+   以 Secret 形式写入 Worker，之后可随时在控制台修改，无需重新部署
+3. **自动部署**：Cloudflare 自动创建 Durable Object 并部署 Worker（无需 Rust 工具链——
+   仓库内已提交预构建的内核快照）
+4. **验证**：浏览器访问 `https://<workers.dev 地址>/health`，返回 `{"ok":true,...}` 即成功
+
+部署后还有两件事建议完成：
+
+- **绑定自定义域名**：workers.dev 域名在大陆被 DNS 污染，国内设备请按
+  [第 5 步](#第-5-步绑定自定义域名)绑定自定义域名后使用
+- **客户端接入**：接入 URL 与客户端配置见 [第 6 步](#第-6-步客户端接入)，其中
+  `<访问令牌>` 就是部署时填写的 `EASYTIER_ACCESS_TOKEN`
+
+> 说明：
+> - 一键部署使用仓库内提交的**内核快照**版本；GitHub Actions 方式（下文）每次部署都从
+>   EasyTier 上游源码重新构建，内核始终最新。两者可并存，互不影响
+> - ⚠️ 任何方式部署后，都请阅读[限额与注意事项](#限额与注意事项)中的
+>   **Durable Object 用量与风险声明**——长时间超限使用存在账号被暂停的风险
+
+## 部署教程（GitHub Actions 方式，零基础版）
 
 ### 第 0 步：准备三样东西
 

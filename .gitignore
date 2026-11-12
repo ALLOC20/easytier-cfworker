@@ -1,3 +1,4 @@
+# 调试残留
 obs.json
 obs2.json
 rt.txt
@@ -10,3 +11,12 @@ pm.txt
 tail.json
 toml_rs.txt
 ws_host.txt
+
+# 一键部署 / 本地开发
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+
+# macOS / 编辑器
+.DS_Store

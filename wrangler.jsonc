@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "easytier-cfworker",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-07-22",
+  "compatibility_flags": ["nodejs_compat"],
+  // 一键部署入口：仓库内提交了预构建的内核快照（src/generated/easytier_core.wasm），
+  // 因此 Deploy to Cloudflare 按钮无需 Rust 工具链即可部署。
+  // GitHub Actions（deploy.yml）不使用本文件——它在 CI 中从 EasyTier 上游源码
+  // 重新构建并使用 deploy/wrangler.jsonc 部署，内核始终是最新版。
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": ["**/*.wasm"],
+      "fallthrough": true
+    }
+  ],
+  "vars": {
+    "EASYTIER_OBJECT_NAME": "primary",
+    "EASYTIER_ENABLE_ENCRYPTION": "true"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "EASYTIER_CORE",
+        "class_name": "EasyTierCoreObject"
+      }
+    ]
+  },
+  "exports": {
+    "EasyTierCoreObject": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

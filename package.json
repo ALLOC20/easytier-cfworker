@@ -1,0 +1,30 @@
+{
+  "name": "easytier-cfworker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "EasyTier private relay node on Cloudflare Workers (prebuilt kernel snapshot)",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "@easytier/runtime": "file:src/runtime"
+  },
+  "devDependencies": {
+    "wrangler": "4.134.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "EASYTIER_NETWORK_NAME": {
+        "description": "EasyTier **网络名**：加入同一虚拟网络的设备必须填写一致，例如 `my_net`。"
+      },
+      "EASYTIER_NETWORK_SECRET": {
+        "description": "EasyTier **网络密码**：请使用强随机密码（网络名 + 密码不匹配的设备会在内核握手层被拒绝）。"
+      },
+      "EASYTIER_ACCESS_TOKEN": {
+        "description": "**访问令牌**：出现在接入 URL 中（`wss://你的域名/<访问令牌>`），请当作口令保管。可用 `openssl rand -hex 24` 生成。"
+      }
+    }
+  }
+}

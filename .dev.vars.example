@@ -1,0 +1,14 @@
+# 复制本文件为 .dev.vars 可用于 wrangler dev；Deploy to Cloudflare 按钮会在
+# 部署页面提示你逐项填写，三个值都会以 Secret 形式写入 Worker。
+# 部署完成后也可在 Cloudflare 控制台 → Workers → 你的 Worker → Settings →
+# Variables and Secrets 中修改（Secret 改动立即生效，无需重新部署）。
+
+# EasyTier 网络名：加入同一虚拟网络的设备必须一致
+EASYTIER_NETWORK_NAME=my_net
+
+# EasyTier 网络密码：务必使用强随机密码
+EASYTIER_NETWORK_SECRET=use-a-long-random-secret
+
+# 访问令牌：接入 URL 的一部分（wss://你的域名/<访问令牌>），请当作口令保管
+# 生成方式：openssl rand -hex 24
+EASYTIER_ACCESS_TOKEN=change-me-to-a-long-random-token

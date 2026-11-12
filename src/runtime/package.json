@@ -1,0 +1,23 @@
+{
+  "name": "@easytier/runtime",
+  "version": "0.1.0",
+  "description": "Shared WebAssembly runtime for EasyTier web hosts (vendored dist build)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EasyTier/EasyTier.git",
+    "directory": "easytier-js/runtime"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./adapter": {
+      "types": "./adapter.d.ts",
+      "import": "./adapter.js"
+    }
+  }
+}

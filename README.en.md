@@ -5,6 +5,8 @@
 > Run the EasyTier WASM core on Cloudflare Workers to get a **private wss handshake/relay
 > node of your own**. Fully built and deployed by GitHub Actions — no local toolchain needed.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ALLOC20/easytier-cfworker)
+
 ---
 
 ## Motivation: Why This Project Exists
@@ -82,7 +84,37 @@ On every push to `main` (or a manual trigger), `.github/workflows/deploy.yml`:
 4. Applies your `deploy/worker.ts` and `deploy/wrangler.jsonc`, runs `wrangler deploy`
 5. Uploads the EasyTier secrets, health-checks, and maintains the WAF rule
 
-## Deployment Guide (Beginner Friendly)
+## One-Click Deploy (Deploy to Cloudflare)
+
+Click the button above to deploy your own relay node to your Cloudflare account in a few
+minutes — no command line required:
+
+1. **Authorize & clone**: the button guides you through granting Cloudflare access to
+   GitHub, then clones this repository into your own account
+2. **Fill in three secrets**: the setup page prompts for `EASYTIER_NETWORK_NAME`,
+   `EASYTIER_NETWORK_SECRET` and `EASYTIER_ACCESS_TOKEN`; they are stored as Worker
+   secrets and can be changed later in the dashboard without redeploying
+3. **Automatic deploy**: Cloudflare provisions the Durable Object and deploys the Worker
+   (no Rust toolchain needed — a prebuilt kernel snapshot is committed to the repo)
+4. **Verify**: visit `https://<your workers.dev address>/health`; `{"ok":true,...}` means
+   success
+
+Two follow-ups are recommended:
+
+- **Bind a custom domain**: `workers.dev` is DNS-polluted in mainland China — bind a
+  custom domain as described in [step 5](#step-5-bind-a-custom-domain)
+- **Connect clients**: see [step 6](#step-6-connect-clients); the `<access-token>` in the
+  URL is the `EASYTIER_ACCESS_TOKEN` you entered during setup
+
+> Notes:
+> - One-click deploy uses the **kernel snapshot** committed to this repo; the GitHub
+>   Actions flow (below) always rebuilds from upstream EasyTier source, so its kernel is
+>   always current. Both paths can coexist without interfering
+> - ⚠️ Whichever path you choose, read the **Durable Object usage and risk disclosure**
+>   under [Limits and Notes](#limits-and-notes) — sustained overage can get your account
+>   suspended
+
+## Deployment Guide (GitHub Actions, Beginner Friendly)
 
 ### Step 0: Prepare Three Things
 
